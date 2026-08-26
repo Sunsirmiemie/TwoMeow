@@ -1,0 +1,68 @@
+[
+  {
+    "name": "Baseline",
+    "overall_hit": 0.715,
+    "overall_mrr": 0.463911,
+    "overall_ts": 0.589473,
+    "mttc": 6.36,
+    "buying": 0.6625,
+    "browsing": 0.725,
+    "intent_override": 0.766667,
+    "boundary": 0.9
+  },
+  {
+    "name": "Hybrid",
+    "overall_hit": 0.715,
+    "overall_mrr": 0.426988,
+    "overall_ts": 0.577996,
+    "mttc": 6.38,
+    "buying": 0.6625,
+    "browsing": 0.725,
+    "intent_override": 0.766667,
+    "boundary": 0.9
+  },
+  {
+    "name": "+ Entropy",
+    "overall_hit": 0.8,
+    "overall_mrr": 0.458925,
+    "overall_ts": 0.656178,
+    "mttc": 5.075,
+    "buying": 0.7375,
+    "browsing": 0.8375,
+    "intent_override": 0.833333,
+    "boundary": 0.9
+  },
+  {
+    "name": "+ Early Stop",
+    "overall_hit": 0.885,
+    "overall_mrr": 0.536438,
+    "overall_ts": 0.754531,
+    "mttc": 3.445,
+    "buying": 0.8875,
+    "browsing": 0.9,
+    "intent_override": 0.833333,
+    "boundary": 0.9
+  },
+  {
+    "name": "+ Override",
+    "overall_hit": 0.89,
+    "overall_mrr": 0.554536,
+    "overall_ts": 0.763261,
+    "mttc": 3.405,
+    "buying": 0.8875,
+    "browsing": 0.9,
+    "intent_override": 0.866667,
+    "boundary": 0.9
+  },
+  {
+    "name": "Final",
+    "overall_hit": 0.79,
+    "overall_mrr": 0.472952,
+    "overall_ts": 0.654486,
+    "mttc": 5.12,
+    "buying": 0.7375,
+    "browsing": 0.8375,
+    "intent_override": 0.766667,
+    "boundary": 0.9
+  }
+]

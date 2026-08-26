@@ -1,0 +1,42 @@
+# Default configuration for TwoMeow conversational search agent.
+# All hyperparameters live here — never scatter magic numbers in business code.
+
+retrieval:
+  top_k: 100
+  field_weights:
+    title: 6.0
+    categories: 4.0
+    features: 2.5
+    description: 2.5
+    store: 1.5
+    details: 1.0
+
+fusion:
+  rrf_k: 60
+  bm25_base: 0.75
+  dense_base: 0.25
+  # Turn-aware weights for browsing (slots=0 / slots=1 / slots>=2)
+  browsing_weights:
+    - [0.50, 0.50]
+    - [0.60, 0.40]
+    - [0.75, 0.25]
+
+dense:
+  use_dense: true
+  model: "all-MiniLM-L6-v2"
+  batch_size: 512
+
+ranking:
+  use_llm_ranker: false
+  ranker_model: "claude-haiku-4-5-20251001"
+  rerank_top_n: 20
+
+dialogue:
+  entropy_tau: 0.3          # early-stop threshold from PDF §V (ablation: τ=0.3 optimal)
+  min_pool_for_dynamic: 10  # minimum pool size for reliable entropy estimation
+  few_slots_threshold: 2    # pool truncation trigger
+  pool_size_threshold: 50
+  truncated_size: 20
+  use_early_stop: true      # ablation shows MTTC 5.1→3.4, TechScore 0.656→0.763
+  use_dynamic_entropy: true
+  use_override_detection: true
