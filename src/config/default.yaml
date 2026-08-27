@@ -15,11 +15,10 @@ fusion:
   rrf_k: 60
   bm25_base: 0.75
   dense_base: 0.25
-  # Turn-aware weights for browsing (slots=0 / slots=1 / slots>=2)
+  # Early browsing weights (slots=0 / slots=1); base weights apply for slots>=2.
   browsing_weights:
     - [0.50, 0.50]
     - [0.60, 0.40]
-    - [0.75, 0.25]
 
 dense:
   use_dense: true

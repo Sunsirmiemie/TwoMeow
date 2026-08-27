@@ -12,22 +12,21 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.agent.orchestrator import Agent
+from src.config.cli import add_agent_flags, agent_overrides
 from evaluator.local_evaluator import evaluate, load_jsonl, catalog_index
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--catalog", default="data/catalog.jsonl")
     parser.add_argument("--dataset", default="data/public_set.jsonl")
     parser.add_argument("--output",  default="results.json")
-    parser.add_argument("--no-dense",  action="store_true")
-    parser.add_argument("--llm-rank",  action="store_true")
-    args = parser.parse_args()
+    return add_agent_flags(parser)
 
-    config = {
-        "use_dense":      not args.no_dense,
-        "use_llm_ranker": args.llm_rank,
-    }
+
+def main() -> None:
+    args = build_parser().parse_args()
+    config = agent_overrides(args)
 
     print("Loading catalog and building index...")
     agent = Agent(args.catalog, config)

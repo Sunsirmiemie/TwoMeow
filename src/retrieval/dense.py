@@ -21,10 +21,16 @@ def _catalog_hash(catalog_path: str) -> str:
 
 
 class DenseRetriever:
-    def __init__(self, catalog_path: str, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(
+        self,
+        catalog_path: str,
+        model_name: str = "all-MiniLM-L6-v2",
+        batch_size: int = 512,
+    ):
         from sentence_transformers import SentenceTransformer
         self.model = SentenceTransformer(model_name)
         self.model_name = model_name
+        self.batch_size = batch_size
         self.asins: list[str] = []
         self.embeddings: np.ndarray | None = None
         self._build_or_load(catalog_path)
@@ -50,7 +56,7 @@ class DenseRetriever:
 
         self.embeddings = self.model.encode(
             texts,
-            batch_size=512,
+            batch_size=self.batch_size,
             show_progress_bar=True,
             normalize_embeddings=True,
             convert_to_numpy=True,

@@ -5,18 +5,27 @@ Falls back to BM25-only when sentence-transformers is not installed.
 from __future__ import annotations
 
 from .bm25 import BM25Retriever
-from ..ranking.scorer import fuse, BM25_BASE, DENSE_BASE
+from ..ranking.scorer import fuse, BM25_BASE, DENSE_BASE, RRF_K
+
+_BROWSING_WEIGHTS = ((0.50, 0.50), (0.60, 0.40))
 
 
 class HybridRetriever:
     def __init__(self, catalog_path: str, config: dict):
-        self.bm25 = BM25Retriever(catalog_path)
+        self.bm25 = BM25Retriever(catalog_path, config.get("field_weights"))
+        self.rrf_k = config.get("rrf_k", RRF_K)
+        self.bm25_base = config.get("bm25_base", BM25_BASE)
+        self.dense_base = config.get("dense_base", DENSE_BASE)
+        self.browsing_weights = tuple(
+            tuple(pair) for pair in config.get("browsing_weights", _BROWSING_WEIGHTS)
+        )
         self.dense = None
         if config.get("use_dense", True):
             try:
                 from .dense import DenseRetriever
                 model = config.get("dense_model", "all-MiniLM-L6-v2")
-                self.dense = DenseRetriever(catalog_path, model)
+                batch_size = config.get("dense_batch_size", 512)
+                self.dense = DenseRetriever(catalog_path, model, batch_size)
             except ImportError:
                 pass  # sentence-transformers not installed; BM25-only mode
 
@@ -45,12 +54,15 @@ class HybridRetriever:
         # Early turns: more dense weight for broad semantic recall.
         # Later turns: shift toward BM25 as exact keywords accumulate.
         dense_results = self.dense.search(query, top_k=top_k)
-        n_slots = len(slots)
-        if n_slots == 0:
-            bm25_w, dense_w = 0.50, 0.50
-        elif n_slots == 1:
-            bm25_w, dense_w = 0.60, 0.40
-        else:
-            bm25_w, dense_w = BM25_BASE, DENSE_BASE
+        bm25_w, dense_w = self.bm25_base, self.dense_base
+        if len(slots) < len(self.browsing_weights):
+            bm25_w, dense_w = self.browsing_weights[len(slots)]
 
-        return fuse(bm25_results, dense_results, top_k, bm25_w=bm25_w, dense_w=dense_w)
+        return fuse(
+            bm25_results,
+            dense_results,
+            top_k,
+            bm25_w=bm25_w,
+            dense_w=dense_w,
+            rrf_k=self.rrf_k,
+        )

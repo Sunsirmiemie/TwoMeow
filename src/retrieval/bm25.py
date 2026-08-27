@@ -5,13 +5,21 @@ Reads from a CatalogIndex; exposes title and attr caches for downstream componen
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping
 
 from .catalog import CatalogIndex, FIELD_WEIGHTS, clean_query
 
 
 class BM25Retriever:
-    def __init__(self, catalog_path: str):
+    def __init__(
+        self,
+        catalog_path: str,
+        field_weights: Mapping[str, float] | None = None,
+    ):
         self._index = CatalogIndex(catalog_path)
+        self.field_weights = dict(
+            FIELD_WEIGHTS if field_weights is None else field_weights
+        )
 
     # ── Cache proxies for HybridRetriever / Ranker ────────────────────────────
 
@@ -30,7 +38,7 @@ class BM25Retriever:
         if not expression:
             return []
 
-        weight_str = ", ".join(str(w) for w in FIELD_WEIGHTS.values())
+        weight_str = ", ".join(str(w) for w in self.field_weights.values())
         sql = f"""
             SELECT parent_asin, price,
                    bm25(products, 0, {weight_str}) AS score

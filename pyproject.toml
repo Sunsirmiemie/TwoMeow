@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "twomeow-conversational-search"
+version = "0.1.0"
+description = "Offline-first conversational product search agent"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "numpy>=1.26,<3",
+  "PyYAML>=6,<7",
+]
+
+[project.optional-dependencies]
+dense = ["sentence-transformers>=2.7,<6"]
+llm = ["anthropic>=0.30,<1"]
+test = [
+  "build>=1,<2",
+  "pytest>=8,<9",
+  "setuptools>=68",
+  "wheel>=0.42,<1",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+  "src",
+  "src.*",
+  "agent",
+  "agent.*",
+  "starter",
+  "starter.*",
+  "evaluator",
+  "evaluator.*",
+]
+exclude = [
+  "build",
+  "build.*",
+  "data",
+  "data.*",
+  "dist",
+  "dist.*",
+  "graft",
+  "graft.*",
+  "kit_extract",
+  "kit_extract.*",
+  "tests",
+  "tests.*",
+]
+
+[tool.setuptools.package-data]
+"src.config" = ["default.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

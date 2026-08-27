@@ -24,14 +24,19 @@ Example: ["B001XX", "B002YY"]"""
 
 
 class Ranker:
-    def __init__(self, config: dict, title_lookup: dict[str, str] | None = None):
+    def __init__(
+        self,
+        config: dict,
+        title_lookup: dict[str, str] | None = None,
+        client=None,
+    ):
         self.enabled   = config.get("use_llm_ranker", False)
         self.top_n     = config.get("rerank_top_n", 20)
         self.model     = config.get("ranker_model", "claude-haiku-4-5-20251001")
         self._titles   = title_lookup or {}
-        self._client   = None
-        self._total_prompt_tokens     = 0
-        self._total_completion_tokens = 0
+        self._client   = client
+        self._prompt_tokens     = 0
+        self._completion_tokens = 0
 
     def _get_client(self):
         if self._client is None:
@@ -43,6 +48,8 @@ class Ranker:
         return self._client
 
     def rerank(self, candidates: list[dict], session, top_k: int = 10) -> list[dict]:
+        self._prompt_tokens = 0
+        self._completion_tokens = 0
         if not self.enabled or not candidates:
             return candidates[:top_k]
 
@@ -68,8 +75,8 @@ class Ranker:
                 max_tokens=256,
                 messages=[{"role": "user", "content": prompt}],
             )
-            self._total_prompt_tokens     += response.usage.input_tokens
-            self._total_completion_tokens += response.usage.output_tokens
+            self._prompt_tokens = response.usage.input_tokens
+            self._completion_tokens = response.usage.output_tokens
 
             reranked_asins: list[str] = json.loads(response.content[0].text)
             asin_to_item = {p["parent_asin"]: p for p in pool}
@@ -84,6 +91,6 @@ class Ranker:
     @property
     def token_usage(self) -> dict:
         return {
-            "prompt_tokens": self._total_prompt_tokens,
-            "completion_tokens": self._total_completion_tokens,
+            "prompt_tokens": self._prompt_tokens,
+            "completion_tokens": self._completion_tokens,
         }

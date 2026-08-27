@@ -62,6 +62,16 @@ def test_ask_attribute_is_valid_or_none():
     assert attr is None or attr in ALLOWED_ATTRIBUTES
 
 
+def test_all_public_agent_entries_reexport_the_canonical_agent():
+    from agent.agent import Agent as LegacyAgent
+    from run_eval import Agent as EvalAgent
+    from starter.agent import Agent as StarterAgent
+
+    assert LegacyAgent is Agent
+    assert StarterAgent is Agent
+    assert EvalAgent is Agent
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
     for t in tests:

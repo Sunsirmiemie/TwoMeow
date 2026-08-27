@@ -22,13 +22,17 @@ def normalized_entropy(values: list[str]) -> float:
     return H / max_H if max_H > 0 else 0.0
 
 
-def blended_entropy(attr: str, values: list[str]) -> float:
+def blended_entropy(
+    attr: str,
+    values: list[str],
+    min_pool_for_dynamic: int = MIN_POOL_FOR_DYNAMIC,
+) -> float:
     """Blend global PDF entropy with observed entropy when pool is too small."""
     global_h = GLOBAL_ENTROPY.get(attr, 0.5)
     if not values:
         return global_h
     obs_h = normalized_entropy(values) if len(values) >= 2 else global_h
-    w = min(len(values) / MIN_POOL_FOR_DYNAMIC, 1.0)
+    w = min(len(values) / min_pool_for_dynamic, 1.0)
     return w * obs_h + (1 - w) * global_h
 
 
@@ -36,6 +40,7 @@ def score_attribute(
     attr: str,
     candidates: list[dict],
     attr_cache: dict[str, dict],
+    min_pool_for_dynamic: int = MIN_POOL_FOR_DYNAMIC,
 ) -> float:
     """Compute coverage × normalized_entropy for one attribute over the candidate pool."""
     values: list[str] = [
@@ -46,7 +51,7 @@ def score_attribute(
     coverage = len(values) / n if n > 0 else 0.0
     entropy = (
         normalized_entropy(values)
-        if len(values) >= MIN_POOL_FOR_DYNAMIC
-        else blended_entropy(attr, values)
+        if len(values) >= min_pool_for_dynamic
+        else blended_entropy(attr, values, min_pool_for_dynamic)
     )
     return coverage * entropy

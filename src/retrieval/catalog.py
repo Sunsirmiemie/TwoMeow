@@ -5,6 +5,7 @@ The in-memory SQLite connection is owned by CatalogIndex and consumed by BM25Ret
 from __future__ import annotations
 
 import json
+import math
 import re
 import sqlite3
 import unicodedata
@@ -38,6 +39,14 @@ def normalize(text) -> str:
     elif not isinstance(text, str):
         text = str(text)
     return unicodedata.normalize("NFKC", text)
+
+
+def _normalize_price(value) -> float | None:
+    try:
+        price = float(value)
+    except (TypeError, ValueError):
+        return None
+    return price if math.isfinite(price) else None
 
 
 def clean_query(text: str, max_terms: int = 40) -> str:
@@ -81,7 +90,7 @@ class CatalogIndex:
                 features = normalize(p.get("features", ""))
                 desc     = normalize(p.get("description", ""))
                 det      = normalize(details)
-                price    = p.get("price")
+                price    = _normalize_price(p.get("price"))
 
                 batch.append((
                     asin, title,
