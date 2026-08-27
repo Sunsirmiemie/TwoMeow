@@ -8,6 +8,7 @@ import statistics
 import uuid
 from collections import defaultdict
 from pathlib import Path
+from typing import Callable
 
 from starter.agent import Agent
 
@@ -107,6 +108,43 @@ def normalize_recommendations(payload: object, catalog_ids: set[str]) -> list[st
         if len(result) >= TOP_K:
             break
     return result
+
+
+def _valid_response(response: object) -> bool:
+    return (
+        isinstance(response, dict)
+        and isinstance(response.get("message"), str)
+        and (
+            response.get("ask_attribute") is None
+            or isinstance(response.get("ask_attribute"), str)
+        )
+        and isinstance(response.get("recommendations"), list)
+    )
+
+
+def _trace_instrumentation_status(debug_trace: object) -> str | None:
+    if debug_trace is None:
+        return "trace_missing"
+    if not isinstance(debug_trace, dict):
+        return "instrumentation_error"
+    required_paths = (
+        ("retrieval", "bm25"),
+        ("retrieval", "dense"),
+        ("retrieval", "rrf"),
+        ("rerank_pool",),
+        ("ranker", "api_pool"),
+        ("ranker", "output"),
+        ("final",),
+    )
+    for path in required_paths:
+        stage: object = debug_trace
+        for key in path:
+            if not isinstance(stage, dict):
+                return "instrumentation_error"
+            stage = stage.get(key)
+        if not isinstance(stage, dict) or not isinstance(stage.get("candidates"), list):
+            return "instrumentation_error"
+    return None
 
 
 def catalog_index(catalog_path: str | Path) -> tuple[set[str], dict[str, list[str]], dict[str, dict]]:
@@ -213,12 +251,69 @@ def materialize_hidden_fields(sample: dict, products: dict[str, dict]) -> tuple[
     return card, behavior
 
 
+def _candidate_rank(stage: object, target: str) -> int | None:
+    """Return target rank from a target-agnostic Agent stage snapshot."""
+    if not isinstance(stage, dict) or not isinstance(stage.get("candidates"), list):
+        return None
+    for evaluator_rank, candidate in enumerate(stage["candidates"], start=1):
+        if not isinstance(candidate, dict):
+            continue
+        if str(candidate.get("parent_asin", "")) != target:
+            continue
+        return evaluator_rank
+    return None
+
+
+def _trace_record(
+    *,
+    run_id: str,
+    session_id: str,
+    sample: dict,
+    turn: int,
+    hit_eligible: bool,
+    target: str,
+    ranked: list[str],
+    debug_trace: object,
+    evaluation_status: dict,
+) -> dict:
+    """Convert Agent candidate snapshots to evaluator-owned target ranks."""
+    debug = debug_trace if isinstance(debug_trace, dict) else {}
+    retrieval = debug.get("retrieval") if isinstance(debug.get("retrieval"), dict) else {}
+    dense = retrieval.get("dense") if isinstance(retrieval.get("dense"), dict) else {}
+    rrf = retrieval.get("rrf") if isinstance(retrieval.get("rrf"), dict) else {}
+    ranker = debug.get("ranker") if isinstance(debug.get("ranker"), dict) else {}
+    final_rank = ranked.index(target) + 1 if target in ranked else None
+    return {
+        "schema_version": 1,
+        "run_id": run_id,
+        "session_id": session_id,
+        "sample_id": sample["sample_id"],
+        "scenario": sample["scenario_type"],
+        "turn": turn,
+        "hit_eligible": hit_eligible,
+        "hit_this_turn": hit_eligible and final_rank is not None,
+        "evaluation_status": evaluation_status,
+        "target_ranks": {
+            "bm25": _candidate_rank(retrieval.get("bm25"), target),
+            "dense": _candidate_rank(dense, target) if dense.get("applied") is True else None,
+            "rrf": _candidate_rank(rrf, target) if rrf.get("applied") is True else None,
+            "rerank_pool": _candidate_rank(debug.get("rerank_pool"), target),
+            "ranker_api_pool": _candidate_rank(ranker.get("api_pool"), target),
+            "ranker": _candidate_rank(ranker.get("output"), target),
+            "final": final_rank,
+        },
+        "agent_debug": debug,
+    }
+
+
 def evaluate(
     agent: Agent,
     samples: list[dict],
     catalog_ids: set[str],
     categories: dict[str, list[str]],
     products: dict[str, dict],
+    trace_sink: Callable[[dict], None] | None = None,
+    run_id: str | None = None,
 ) -> dict:
     sessions: list[dict] = []
     total_prompt_tokens = 0
@@ -238,17 +333,44 @@ def evaluate(
         for turn in range(1, MAX_TURNS + 1):
             try:
                 response = agent.respond(session_id, user_message, turn, TOP_K)
-            except Exception:
+                evaluation_status = {"status": "ok"}
+            except Exception as exc:
                 response = {"message": "", "ask_attribute": None, "recommendations": []}
-            if not isinstance(response, dict) or not isinstance(response.get("message"), str):
-                response = {"message": "", "ask_attribute": None, "recommendations": []}
-            usage = response.get("usage")
+                evaluation_status = {
+                    "status": "agent_error",
+                    "error_type": type(exc).__name__,
+                }
+            usage = response.get("usage") if isinstance(response, dict) else None
             if isinstance(usage, dict):
                 if isinstance(usage.get("prompt_tokens"), int) and usage["prompt_tokens"] >= 0:
                     total_prompt_tokens += usage["prompt_tokens"]
                 if isinstance(usage.get("completion_tokens"), int) and usage["completion_tokens"] >= 0:
                     total_completion_tokens += usage["completion_tokens"]
+            if (
+                evaluation_status["status"] == "ok"
+                and not _valid_response(response)
+            ):
+                response = {"message": "", "ask_attribute": None, "recommendations": []}
+                evaluation_status = {"status": "invalid_response"}
             ranked = normalize_recommendations(response.get("recommendations"), catalog_ids)
+            if trace_sink is not None:
+                if evaluation_status["status"] == "ok":
+                    trace_status = _trace_instrumentation_status(
+                        response.get("debug_trace")
+                    )
+                    if trace_status is not None:
+                        evaluation_status = {"status": trace_status}
+                trace_sink(_trace_record(
+                    run_id=run_id or "unidentified-run",
+                    session_id=session_id,
+                    sample=sample,
+                    turn=turn,
+                    hit_eligible=override_applied,
+                    target=target,
+                    ranked=ranked,
+                    debug_trace=response.get("debug_trace"),
+                    evaluation_status=evaluation_status,
+                ))
             if override_applied and target in ranked:
                 best_rank = ranked.index(target) + 1
                 hit_turn = turn

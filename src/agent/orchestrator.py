@@ -13,12 +13,13 @@ from __future__ import annotations
 import re
 
 from ..config import load_config
+from ..observability import candidate_snapshot
 from ..retrieval.hybrid import HybridRetriever
 from ..retrieval.candidate_builder import build_rerank_pool
 from ..ranking.reranker import Ranker
 from ..dialogue.question_policy import Clarifier
 from ..dialogue.attribute_stats import SCOREABLE_ATTRS
-from ..dialogue.early_stop import should_stop
+from ..dialogue.early_stop import evaluate_stop, should_stop
 from .router import IntentRouter
 from .state import SessionMemory, SlotTracker
 from .response_builder import build_query, build_message
@@ -56,13 +57,23 @@ class Agent:
         # 3. Retrieve
         query      = build_query(user_message, session)
         track      = session.retrieval_track()
-        candidates = self.retriever.retrieve(
-            query,
-            session.slots,
-            track,
-            top_k=self.retrieval_top_k,
-            turn=turn,
-        )
+        trace_enabled = self.config["trace_enabled"]
+        if trace_enabled:
+            candidates, retrieval_trace = self.retriever.retrieve_with_trace(
+                query,
+                session.slots,
+                track,
+                top_k=self.retrieval_top_k,
+                turn=turn,
+            )
+        else:
+            candidates = self.retriever.retrieve(
+                query,
+                session.slots,
+                track,
+                top_k=self.retrieval_top_k,
+                turn=turn,
+            )
 
         # 4. Attribute selection (dynamic entropy or global-entropy fallback)
         attr_cache   = self.retriever.bm25._attr_cache
@@ -70,24 +81,70 @@ class Agent:
         cands_arg    = candidates if use_dynamic else None
         cache_arg    = attr_cache if use_dynamic else None
 
-        if self.config.get("use_early_stop", True):
-            asked     = set(session.asked_attributes)
-            known     = set(session.slots.keys())
-            remaining = [a for a in SCOREABLE_ATTRS if a not in asked and a not in known]
-            if should_stop(
-                candidates,
-                attr_cache,
-                remaining,
-                tau=self.config.get("entropy_tau", 0.3),
-                min_pool_for_dynamic=self.config.get("min_pool_for_dynamic", 10),
-            ):
+        asked     = set(session.asked_attributes)
+        known     = set(session.slots.keys())
+        remaining = [a for a in SCOREABLE_ATTRS if a not in asked and a not in known]
+        tau = self.config.get("entropy_tau", 0.3)
+        min_pool = self.config.get("min_pool_for_dynamic", 10)
+        early_stop_enabled = self.config.get("use_early_stop", True)
+        stop_decision = None
+        question_decision = None
+
+        if early_stop_enabled:
+            if trace_enabled:
+                stop_decision = evaluate_stop(
+                    candidates,
+                    attr_cache,
+                    remaining,
+                    tau=tau,
+                    min_pool_for_dynamic=min_pool,
+                )
+                stop_triggered = stop_decision["triggered"]
+            else:
+                stop_triggered = should_stop(
+                    candidates,
+                    attr_cache,
+                    remaining,
+                    tau=tau,
+                    min_pool_for_dynamic=min_pool,
+                )
+            if stop_triggered:
                 # Below entropy threshold — wildcard gives any undisclosed constraint
                 session.asked_attributes.append("other")
                 ask_attribute = "other"
+                if trace_enabled:
+                    question_decision = {
+                        "attribute": "other",
+                        "eligible_attributes": remaining,
+                        "scores": {},
+                        "mode": "early_stop",
+                    }
+            else:
+                if trace_enabled:
+                    ask_attribute, question_decision = self.clarifier.next_ask_with_trace(
+                        session,
+                        cands_arg,
+                        cache_arg,
+                    )
+                else:
+                    ask_attribute = self.clarifier.next_ask(session, cands_arg, cache_arg)
+        else:
+            stop_triggered = False
+            if trace_enabled:
+                stop_decision = evaluate_stop(
+                    candidates,
+                    attr_cache,
+                    remaining,
+                    tau=tau,
+                    min_pool_for_dynamic=min_pool,
+                )
+                ask_attribute, question_decision = self.clarifier.next_ask_with_trace(
+                    session,
+                    cands_arg,
+                    cache_arg,
+                )
             else:
                 ask_attribute = self.clarifier.next_ask(session, cands_arg, cache_arg)
-        else:
-            ask_attribute = self.clarifier.next_ask(session, cands_arg, cache_arg)
 
         # 5. Pool truncation + reranking
         rerank_pool = build_rerank_pool(
@@ -97,12 +154,19 @@ class Agent:
             pool_size_threshold=self.config.get("pool_size_threshold", 50),
             truncated_size=self.config.get("truncated_size", 20),
         )
-        ranked      = self.ranker.rerank(rerank_pool, session, top_k=top_k)
+        if trace_enabled:
+            ranked, ranker_trace = self.ranker.rerank_with_trace(
+                rerank_pool,
+                session,
+                top_k=top_k,
+            )
+        else:
+            ranked = self.ranker.rerank(rerank_pool, session, top_k=top_k)
 
         # 6. Record turn
         session.add_turn(user_message, ranked)
 
-        return {
+        response = {
             "message": build_message(ask_attribute, ranked),
             "ask_attribute": ask_attribute,
             "recommendations": [
@@ -111,3 +175,36 @@ class Agent:
             ],
             "usage": self.ranker.token_usage,
         }
+        if trace_enabled:
+            response["debug_trace"] = {
+                "schema_version": 1,
+                "turn": turn,
+                "retrieval": retrieval_trace,
+                "dialogue": {
+                    "query": query,
+                    "track": track,
+                    "slots": dict(session.slots),
+                    "candidate_count": len(candidates),
+                    "eligible_attributes": question_decision["eligible_attributes"],
+                    "remaining_attributes": remaining,
+                    "entropy_scores": stop_decision["scores"],
+                    "max_entropy_score": stop_decision["max_score"],
+                    "tau": tau,
+                    "early_stop": {
+                        "enabled": early_stop_enabled,
+                        "triggered": stop_triggered,
+                    },
+                    "chosen_ask_attribute": ask_attribute,
+                    "question_decision": question_decision,
+                },
+                "rerank_pool": {
+                    "configured_truncation_size": self.config["truncated_size"],
+                    "input_count": len(candidates),
+                    "candidate_count": len(rerank_pool),
+                    "truncated": len(rerank_pool) < len(candidates),
+                    "candidates": candidate_snapshot(rerank_pool),
+                },
+                "ranker": ranker_trace,
+                "final": {"candidates": candidate_snapshot(ranked)},
+            }
+        return response

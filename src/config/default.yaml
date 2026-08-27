@@ -30,6 +30,9 @@ ranking:
   ranker_model: "claude-haiku-4-5-20251001"
   rerank_top_n: 20
 
+observability:
+  trace_enabled: false
+
 dialogue:
   entropy_tau: 0.3          # early-stop threshold from PDF §V (ablation: τ=0.3 optimal)
   min_pool_for_dynamic: 10  # minimum pool size for reliable entropy estimation

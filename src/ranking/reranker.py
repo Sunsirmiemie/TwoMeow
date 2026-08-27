@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import os
 
+from ..observability import candidate_snapshot
+
 _PROMPT = """\
 You are a shopping assistant. Rerank the following products by how likely they match the user's need.
 
@@ -48,10 +50,74 @@ class Ranker:
         return self._client
 
     def rerank(self, candidates: list[dict], session, top_k: int = 10) -> list[dict]:
+        ranked, _trace = self._rerank(
+            candidates,
+            session,
+            top_k=top_k,
+            with_trace=False,
+        )
+        return ranked
+
+    def rerank_with_trace(
+        self,
+        candidates: list[dict],
+        session,
+        top_k: int = 10,
+    ) -> tuple[list[dict], dict]:
+        """Return normal ranking output plus API-boundary attempt diagnostics."""
+        ranked, trace = self._rerank(
+            candidates,
+            session,
+            top_k=top_k,
+            with_trace=True,
+        )
+        return ranked, trace
+
+    def _rerank(
+        self,
+        candidates: list[dict],
+        session,
+        top_k: int,
+        with_trace: bool,
+    ) -> tuple[list[dict], dict | None]:
         self._prompt_tokens = 0
         self._completion_tokens = 0
-        if not self.enabled or not candidates:
-            return candidates[:top_k]
+
+        def finish(
+            ranked: list[dict],
+            status: str,
+            attempted: bool,
+            api_pool: list[dict] | None = None,
+            error_type: str | None = None,
+        ) -> tuple[list[dict], dict | None]:
+            if not with_trace:
+                return ranked, None
+            trace = {
+                "enabled": self.enabled,
+                "model": self.model,
+                "top_n": self.top_n,
+                "requested_top_k": top_k,
+                "status": status,
+                "attempted": attempted,
+                "attempt_status": status if attempted else "not_attempted",
+                "input": {"candidates": candidate_snapshot(candidates)},
+                "api_pool": {
+                    "configured_limit": self.top_n,
+                    "candidates": candidate_snapshot(
+                        candidates[: self.top_n] if api_pool is None else api_pool
+                    ),
+                },
+                "output": {"candidates": candidate_snapshot(ranked)},
+                "usage": self.token_usage,
+            }
+            if error_type is not None:
+                trace["error_type"] = error_type
+            return ranked, trace
+
+        if not self.enabled:
+            return finish(candidates[:top_k], "disabled", False)
+        if not candidates:
+            return finish([], "empty", False)
 
         pool = candidates[: self.top_n]
         product_lines = "\n".join(
@@ -83,10 +149,16 @@ class Ranker:
             reranked = [asin_to_item[a] for a in reranked_asins if a in asin_to_item]
             mentioned = set(reranked_asins)
             reranked += [p for p in pool if p["parent_asin"] not in mentioned]
-            return reranked[:top_k]
+            return finish(reranked[:top_k], "api_success", True, pool)
 
-        except Exception:
-            return candidates[:top_k]
+        except Exception as exc:
+            return finish(
+                candidates[:top_k],
+                "fallback",
+                True,
+                pool,
+                error_type=type(exc).__name__,
+            )
 
     @property
     def token_usage(self) -> dict:

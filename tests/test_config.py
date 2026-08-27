@@ -35,6 +35,7 @@ def test_load_config_flattens_agent_defaults():
         "use_llm_ranker": False,
         "ranker_model": "claude-haiku-4-5-20251001",
         "rerank_top_n": 20,
+        "trace_enabled": False,
         "entropy_tau": 0.3,
         "min_pool_for_dynamic": 10,
         "few_slots_threshold": 2,
