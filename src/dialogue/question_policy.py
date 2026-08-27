@@ -6,10 +6,13 @@ Never asks 'category' or 'brand' — evaluator's classify_constraint() cannot re
 from __future__ import annotations
 
 from .attribute_stats import SCOREABLE_ATTRS, GLOBAL_ENTROPY
-from .entropy import score_attribute
+from .entropy import MIN_POOL_FOR_DYNAMIC, score_attribute
 
 
 class Clarifier:
+    def __init__(self, min_pool_for_dynamic: int = MIN_POOL_FOR_DYNAMIC):
+        self.min_pool_for_dynamic = min_pool_for_dynamic
+
     def next_ask(
         self,
         session,
@@ -25,7 +28,15 @@ class Clarifier:
             return "other"
 
         if candidates and attr_cache:
-            scores = {a: score_attribute(a, candidates, attr_cache) for a in eligible}
+            scores = {
+                a: score_attribute(
+                    a,
+                    candidates,
+                    attr_cache,
+                    self.min_pool_for_dynamic,
+                )
+                for a in eligible
+            }
         else:
             # No pool data — use global entropy × assumed 50% coverage
             scores = {a: 0.5 * GLOBAL_ENTROPY.get(a, 0.5) for a in eligible}

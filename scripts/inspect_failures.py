@@ -27,7 +27,7 @@ def main() -> None:
     if near:
         print("\nSample near-miss sessions:")
         for s in near[:5]:
-            print(f"  session={s.get('session_id')} first_hit_rank={s.get('first_hit_rank')}")
+            print(f"  sample={s.get('sample_id')} best_rank={s.get('best_rank')}")
 
 
 if __name__ == "__main__":

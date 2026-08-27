@@ -1,0 +1,19 @@
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+graft/
+
+# Python and local tooling
+__pycache__/
+.pytest_cache/
+.venv/
+.env
+.idea/
+.embed_cache/
+*.egg-info/
+/.ignore
+build/
+dist/
+
+# Large local data and packaged artifacts
+/data/catalog.jsonl
+/kit_extract/**/data/catalog.jsonl
+*.zip
