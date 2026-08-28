@@ -16,6 +16,9 @@ def apply_override(message: str, session) -> bool:
         session.override_applied = True
         session.slots.clear()
         session.asked_attributes.clear()
+        session.other_asked = False
+        session.last_reply_new_info = True
+        session.no_info_streak = 0
         return True
     return False
 

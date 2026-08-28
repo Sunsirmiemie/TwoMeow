@@ -32,7 +32,12 @@ class Agent:
         self.retrieval_top_k = self.config.get("retrieval_top_k", 100)
         self.retriever = HybridRetriever(catalog_path, self.config)
         self.router    = IntentRouter()
-        self.ranker    = Ranker(self.config, title_lookup=self.retriever.bm25._titles)
+        self.ranker    = Ranker(
+            self.config,
+            title_lookup=self.retriever.bm25._titles,
+            categories=self.retriever.bm25._categories,
+            meta=self.retriever.bm25._meta,
+        )
         self.clarifier = Clarifier(self.config.get("min_pool_for_dynamic", 10))
         self._sessions: dict[str, SessionMemory] = {}
 
@@ -51,7 +56,9 @@ class Agent:
                 session.scenario_type = "buying" if _BUYING_RE.search(user_message) else "browsing"
 
         # 2. Extract slots
-        SlotTracker(session).extract_and_update(user_message)
+        new_info = SlotTracker(session).extract_and_update(user_message)
+        session.last_reply_new_info = new_info
+        session.no_info_streak = 0 if new_info else session.no_info_streak + 1
 
         # 3. Retrieve
         query      = build_query(user_message, session)
@@ -65,38 +72,20 @@ class Agent:
         )
 
         # 4. Attribute selection (dynamic entropy or global-entropy fallback)
-        attr_cache   = self.retriever.bm25._attr_cache
-        use_dynamic  = self.config.get("use_dynamic_entropy", True)
-        cands_arg    = candidates if use_dynamic else None
-        cache_arg    = attr_cache if use_dynamic else None
-
-        if self.config.get("use_early_stop", True):
-            asked     = set(session.asked_attributes)
-            known     = set(session.slots.keys())
-            remaining = [a for a in SCOREABLE_ATTRS if a not in asked and a not in known]
-            if should_stop(
-                candidates,
-                attr_cache,
-                remaining,
-                tau=self.config.get("entropy_tau", 0.3),
-                min_pool_for_dynamic=self.config.get("min_pool_for_dynamic", 10),
-            ):
-                # Below entropy threshold — wildcard gives any undisclosed constraint
-                session.asked_attributes.append("other")
-                ask_attribute = "other"
-            else:
-                ask_attribute = self.clarifier.next_ask(session, cands_arg, cache_arg)
-        else:
-            ask_attribute = self.clarifier.next_ask(session, cands_arg, cache_arg)
+        attr_cache    = self.retriever.bm25._attr_cache
+        ask_attribute = self._decide_ask(session, candidates, attr_cache)
 
         # 5. Pool truncation + reranking
-        rerank_pool = build_rerank_pool(
-            candidates,
-            session,
-            few_slots_threshold=self.config.get("few_slots_threshold", 2),
-            pool_size_threshold=self.config.get("pool_size_threshold", 50),
-            truncated_size=self.config.get("truncated_size", 20),
-        )
+        if self.ranker.enabled:
+            rerank_pool = build_rerank_pool(
+                candidates,
+                session,
+                few_slots_threshold=self.config.get("few_slots_threshold", 2),
+                pool_size_threshold=self.config.get("pool_size_threshold", 50),
+                truncated_size=self.config.get("truncated_size", 20),
+            )
+        else:
+            rerank_pool = candidates
         ranked      = self.ranker.rerank(rerank_pool, session, top_k=top_k)
 
         # 6. Record turn
@@ -111,3 +100,31 @@ class Agent:
             ],
             "usage": self.ranker.token_usage,
         }
+
+    def _decide_ask(self, session, candidates, attr_cache) -> str | None:
+        """Adaptive ask/recommend policy.
+
+        Empirical note: the boundary scenario only declines the FIRST ask; later
+        asks reveal constraints normally, so we keep asking after boundary. Asking
+        costs nothing for Hit/MRR (recommendations are returned every turn), so we
+        never hard-stop on 'no new info' either.
+        """
+        if self.config.get("use_early_stop", True):
+            asked     = set(session.asked_attributes)
+            known     = set(session.slots.keys())
+            remaining = [a for a in SCOREABLE_ATTRS if a not in asked and a not in known]
+            if should_stop(
+                candidates,
+                attr_cache,
+                remaining,
+                tau=self.config.get("entropy_tau", 0.3),
+                min_pool_for_dynamic=self.config.get("min_pool_for_dynamic", 10),
+            ):
+                session.asked_attributes.append("other")
+                return "other"
+        use_dynamic = self.config.get("use_dynamic_entropy", True)
+        return self.clarifier.next_ask(
+            session,
+            candidates if use_dynamic else None,
+            attr_cache if use_dynamic else None,
+        )

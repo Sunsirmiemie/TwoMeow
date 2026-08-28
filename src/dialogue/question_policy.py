@@ -24,8 +24,7 @@ class Clarifier:
         eligible = [a for a in SCOREABLE_ATTRS if a not in asked and a not in known]
 
         if not eligible:
-            session.asked_attributes.append("other")
-            return "other"
+            return None
 
         if candidates and attr_cache:
             scores = {

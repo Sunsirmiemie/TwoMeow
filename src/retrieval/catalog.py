@@ -49,6 +49,20 @@ def _normalize_price(value) -> float | None:
     return price if math.isfinite(price) else None
 
 
+def _safe_int(value) -> int | None:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_float(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def clean_query(text: str, max_terms: int = 40) -> str:
     tokens = [
         t.lower() for t in TOKEN_RE.findall(text)
@@ -67,6 +81,8 @@ class CatalogIndex:
         self.conn: sqlite3.Connection = sqlite3.connect(":memory:")
         self.titles: dict[str, str] = {}
         self.attr_cache: dict[str, dict[str, str | None]] = {}
+        self.categories: dict[str, list[str]] = {}
+        self.meta: dict[str, dict] = {}
         self._build(catalog_path)
 
     def _build(self, catalog_path: str) -> None:
@@ -102,6 +118,12 @@ class CatalogIndex:
                 self.titles[asin] = title[:120]
                 searchable = f"{title} {features} {det} {desc}"
                 self.attr_cache[asin] = extract_attrs(searchable, features, det, price)
+                self.categories[asin] = [str(value) for value in (p.get("categories") or [])]
+                self.meta[asin] = {
+                    "price": price,
+                    "rating_number": _safe_int(p.get("rating_number")),
+                    "average_rating": _safe_float(p.get("average_rating")),
+                }
 
                 if len(batch) >= 1000:
                     cur.executemany("INSERT INTO products VALUES (?,?,?,?,?,?,?,?)", batch)

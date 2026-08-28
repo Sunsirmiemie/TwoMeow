@@ -33,8 +33,16 @@ def test_load_config_flattens_agent_defaults():
         "dense_model": "all-MiniLM-L6-v2",
         "dense_batch_size": 512,
         "use_llm_ranker": False,
+        "use_features": True,
         "ranker_model": "claude-haiku-4-5-20251001",
         "rerank_top_n": 20,
+        "feature_weights": {
+            "base": 1.0,
+            "slot": 0.8,
+            "category": 1.0,
+            "popularity": 0.15,
+            "price": 0.4,
+        },
         "entropy_tau": 0.3,
         "min_pool_for_dynamic": 10,
         "few_slots_threshold": 2,
@@ -214,7 +222,9 @@ def test_agent_applies_rerank_pool_threshold_overrides(tmp_path):
 
     response = agent.respond("s1", "desk lamp", turn=1, top_k=10)
 
-    assert len(response["recommendations"]) == 2
+    # Pool truncation only applies when the LLM reranker is enabled.
+    # With the offline feature reranker, the full candidate pool is used.
+    assert len(response["recommendations"]) == 5
 
 
 def test_agent_applies_entropy_threshold_and_dynamic_pool_override(tmp_path):

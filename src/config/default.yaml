@@ -27,8 +27,15 @@ dense:
 
 ranking:
   use_llm_ranker: false
+  use_features: true
   ranker_model: "claude-haiku-4-5-20251001"
   rerank_top_n: 20
+  feature_weights:
+    base: 1.0
+    slot: 0.8
+    category: 1.0
+    popularity: 0.15
+    price: 0.4
 
 dialogue:
   entropy_tau: 0.3          # early-stop threshold from PDF §V (ablation: τ=0.3 optimal)

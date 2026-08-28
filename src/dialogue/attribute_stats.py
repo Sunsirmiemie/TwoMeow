@@ -35,7 +35,16 @@ MATERIAL_RE = re.compile(
 COLOR_RE = re.compile(
     r"\b(black|white|blue|red|pink|green|brown|gray|grey|purple|yellow|orange)\b", re.I
 )
-SIZE_RE    = re.compile(r"\b(xs|xxl|xl|small|medium|large|s\b|m\b|l\b)\b", re.I)
+SIZE_LABEL_RE = re.compile(r"\bsize\s*[:=]?\s*(xs|s|m|l|xl|xxl)\b", re.I)
+SIZE_PHRASE_RE = re.compile(
+    r"\b(xs|xxl|xl|small|medium|large|extra large|one size|plus size|petite|tall|wide|narrow)\b",
+    re.I,
+)
+SIZE_RUN_RE = re.compile(
+    r"\b((?:xs|s|m|l|xl|xxl)\s*(?:[/\-]\s*(?:xs|s|m|l|xl|xxl)){1,3})\b",
+    re.I,
+)
+SIZE_NUMERIC_RE = re.compile(r"\b(?:us|size)\s*[:=]?\s*(\d{1,2}(?:\.\d)?)\b", re.I)
 STYLE_RE   = re.compile(
     r"\b(casual|formal|vintage|sporty|elegant|bohemian|minimalist|streetwear)\b", re.I
 )
@@ -69,6 +78,15 @@ def budget_bucket(price) -> str | None:
         return None
 
 
+def extract_size(text: str) -> str | None:
+    """Size extraction that avoids false positives (e.g. \"I'm\" → m, \"100%\" → 100)."""
+    for pattern in (SIZE_LABEL_RE, SIZE_PHRASE_RE, SIZE_RUN_RE, SIZE_NUMERIC_RE):
+        match = pattern.search(text)
+        if match:
+            return match.group(1) if match.lastindex else match.group(0).lower()
+    return None
+
+
 def extract_attrs(
     searchable: str,
     features: str,
@@ -79,7 +97,7 @@ def extract_attrs(
     return {
         "material": first_match(MATERIAL_RE, searchable),
         "color":    first_match(COLOR_RE, searchable),
-        "size":     first_match(SIZE_RE, searchable),
+        "size":     extract_size(searchable),
         "style":    first_match(STYLE_RE, searchable),
         "use_case": first_match(USECASE_RE, searchable),
         "feature":  first_match(FEATURE_RE, features, details),

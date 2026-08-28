@@ -38,13 +38,15 @@ def test_clarifier_never_asks_category_or_brand():
 def test_clarifier_skips_known_slots():
     session = SessionMemory({})
     session.slots = {a: "x" for a in SCOREABLE_ATTRS}
-    assert Clarifier().next_ask(session) == "other"
+    # With no eligible attribute left, the clarifier returns None and the
+    # orchestrator decides whether the "other" wildcard is worth asking.
+    assert Clarifier().next_ask(session) is None
 
 
 def test_clarifier_skips_already_asked():
     session = SessionMemory({})
     session.asked_attributes = list(SCOREABLE_ATTRS)
-    assert Clarifier().next_ask(session) == "other"
+    assert Clarifier().next_ask(session) is None
 
 
 def test_clarifier_dynamic_scoring():

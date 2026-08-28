@@ -21,10 +21,16 @@ COLORS = frozenset((
 _MATTERS_RE     = re.compile(r"what matters is:\s*(.+?)\.?\s*$", re.I)
 _REQUIREMENT_RE = re.compile(r"a key requirement is:\s*(.+?)\.?\s*$", re.I)
 _NEED_RE        = re.compile(r"what i need is:\s*(.+?)\.?\s*$", re.I)
+_LOOKING_RE     = re.compile(r"looking for\s+([^.;]+?)(?:\s*\.|$)", re.I)
 
 _FALLBACK_PATTERNS: dict[str, list[str]] = {
     "color":    [r"\b(black|white|red|blue|green|pink|grey|gray|brown|navy|beige|yellow|purple|orange)\b"],
-    "size":     [r"\b(xs|s|m|l|xl|xxl|small|medium|large|extra large|\d+[wl]?)\b"],
+    "size":     [
+        r"\bsize\s*[:=]?\s*(xs|s|m|l|xl|xxl)\b",
+        r"\b(xs|xxl|xl|small|medium|large|extra large|one size|plus size|petite|tall|wide|narrow)\b",
+        r"\b((?:xs|s|m|l|xl|xxl)\s*(?:[/\-]\s*(?:xs|s|m|l|xl|xxl)){1,3})\b",
+        r"\b(?:us|size)\s*[:=]?\s*(\d{1,2}(?:\.\d)?)\b",
+    ],
     "brand":    [r"\b(nike|adidas|levi(?:\'s)?|zara|gucci|puma|reebok|calvin klein|h&m|uniqlo)\b"],
     "budget":   [r"under \$?(\d+)", r"less than \$?(\d+)", r"\$?(\d+)\s*or less", r"budget[^\d]*(\d+)"],
     "material": [r"\b(cotton|leather|polyester|wool|silk|denim|linen|nylon|suede|velvet|spandex|rayon|fabric)\b"],
@@ -114,6 +120,9 @@ class SessionMemory:
         self.override_applied: bool = False
         self.asked_attributes: list[str] = []
         self.history: list[dict] = []
+        self.other_asked: bool = False
+        self.last_reply_new_info: bool = True
+        self.no_info_streak: int = 0
 
     def add_turn(self, message: str, recommendations: list) -> None:
         self.history.append({
@@ -146,16 +155,26 @@ class SlotTracker:
     def __init__(self, session: SessionMemory):
         self.session = session
 
-    def extract_and_update(self, message: str) -> None:
+    def extract_and_update(self, message: str) -> bool:
+        """Parse a message into slots. Returns True if any slot value changed."""
+        before = set(self.session.slots.items())
+
+        if "category" not in self.session.slots:
+            m = _LOOKING_RE.search(message)
+            if m:
+                category = re.sub(r"\s+", " ", m.group(1)).strip()
+                if category and category.lower() not in ("clothing", "clothing shoes & jewelry"):
+                    self.session.slots["category"] = category
+
         # IntentRouter has already handled override (slot clear) before this runs.
         m = _MATTERS_RE.search(message)
         if m:
             self.session.slots.update(_parse_constraint_list(m.group(1)))
-            return
+            return set(self.session.slots.items()) != before
         m = _NEED_RE.search(message)
         if m:
             self.session.slots.update(_parse_constraint_list(m.group(1)))
-            return
+            return set(self.session.slots.items()) != before
         m = _REQUIREMENT_RE.search(message)
         if m:
             self.session.slots.update(_parse_constraint_list(m.group(1)))
@@ -163,8 +182,9 @@ class SlotTracker:
                 {k: v for k, v in _fallback_extract(message).items()
                  if k not in self.session.slots}
             )
-            return
+            return set(self.session.slots.items()) != before
         # Generic text — regex fallback, never overwrite confirmed structured slots
         for k, v in _fallback_extract(message).items():
             if k not in self.session.slots:
                 self.session.slots[k] = v
+        return set(self.session.slots.items()) != before

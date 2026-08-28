@@ -22,6 +22,8 @@ _AGENT_KEYS = {
     ("ranking", "use_llm_ranker"): "use_llm_ranker",
     ("ranking", "ranker_model"): "ranker_model",
     ("ranking", "rerank_top_n"): "rerank_top_n",
+    ("ranking", "use_features"): "use_features",
+    ("ranking", "feature_weights"): "feature_weights",
     ("dialogue", "entropy_tau"): "entropy_tau",
     ("dialogue", "min_pool_for_dynamic"): "min_pool_for_dynamic",
     ("dialogue", "few_slots_threshold"): "few_slots_threshold",
