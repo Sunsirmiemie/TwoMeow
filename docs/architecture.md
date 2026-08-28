@@ -15,7 +15,7 @@ TwoMeow 是一个纯内存、无外部数据库依赖的多轮对话电商搜索
 │  ② SlotTracker    结构化槽提取                   │
 │  ③ HybridRetriever 检索 (BM25 + Dense + RRF)    │
 │  ④ Clarifier      动态熵属性选择 + Early Stop     │
-│  ⑤ Ranker         候选截断 + (可选) LLM 重排      │
+│  ⑤ Ranker         top-20 → 字段感知本地重排 → top-10 │
 │  ⑥ 返回结果        recommendations + ask_attr    │
 └─────────────────────────────────────────────────┘
       │
@@ -39,7 +39,8 @@ agent/response_builder.py     ← 无内部依赖
 
 ranking/scorer.py             ← 无内部依赖
 ranking/features.py           ← 无内部依赖
-ranking/reranker.py           ← 无内部依赖
+ranking/profile_prior.py       ← 无内部依赖
+ranking/reranker.py           ← profile_prior
 
 retrieval/catalog.py          ← dialogue/attribute_stats
 retrieval/bm25.py             ← retrieval/catalog
@@ -140,10 +141,11 @@ else:
 
 **候选池截断**：slots < 2 且候选 ≥ 50 → 取 top-20（防止槽少时从过大的模糊池里猜）
 
-**LLM 重排**（`use_llm_ranker=True` 时启用）：
-- 向 Claude API 发送 top-20 候选的 ASIN + title
-- Listwise 排序，返回 JSON 数组
-- 离线兜底：直接返回检索分顺序
+**字段感知本地重排**（默认）：
+- 固定取检索 top-20，输出 top-10；
+- 以 BM25/RRF 分数、类目、价格、热度和确认槽位的精确覆盖率组成相关性分；
+- 覆盖率检查商品 `title/categories/features/details` 是否满足已确认约束；
+- 不训练模型、不调用网络或 LLM。LLM 路径仅为兼容可选分支，不是默认评测方案。
 
 ## 超参数汇总
 
@@ -156,10 +158,11 @@ else:
 | Dense base weight | 0.25 | 同上 |
 | entropy τ | 0.3 | Early Stop 阈值 |
 | min pool for dynamic | 10 | 小于此值混合全局熵 |
-| rerank top_n | 20 | LLM 重排候选数 |
+| rerank top_n | 20 | 本地重排候选数 |
+| use_field_aware_slot_coverage | true | 确认槽位字段覆盖开关 |
 | truncated pool size | 20 | 槽少时截断 |
 
-## 当前评测结果（公开集 200 条，无 LLM 重排）
+## 历史系统消融结果（公开集 200 条，无 LLM 重排）
 
 | 系统 | Buying | Browsing | Override | Boundary | Overall | MRR | MTTC | TechScore |
 |------|--------|----------|----------|----------|---------|-----|------|-----------|
@@ -170,4 +173,4 @@ else:
 | + Early Stop | 0.888 | 0.900 | 0.833 | 0.900 | 0.885 | 0.536 | 3.44 | 0.755 |
 | + Override | 0.888 | 0.900 | 0.867 | 0.900 | 0.890 | 0.555 | 3.40 | **0.763** |
 
-最优配置 = Hybrid + Entropy + Early Stop + Override（均已设为默认）。
+上表用于说明历史对话策略增益。当前 rerank 为保留画像先验的字段感知精确约束覆盖与风险感知 MMR：HitRate@10=0.905、MRR=0.706437、TechnicalScore=0.813731，结果见 `results_rerank_risk_aware_mmr_profile.json`。

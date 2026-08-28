@@ -17,3 +17,6 @@ dist/
 /data/catalog.jsonl
 /kit_extract/**/data/catalog.jsonl
 *.zip
+
+# Local copy of the original TechJam kit; do not upload
+kit_extract/

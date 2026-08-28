@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter
+from typing import Any
 
 # Attributes that evaluator's classify_constraint() CAN return.
 # category and brand deliberately excluded (evaluator never classifies them).
@@ -86,7 +87,7 @@ def _global_entropy(attr: str, coverage: float, values: list[str]) -> float:
 class Clarifier:
     def next_ask(
         self,
-        session,
+        session: Any,
         candidates: list[dict] | None = None,
         attr_cache: dict[str, dict] | None = None,
     ) -> str:

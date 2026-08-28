@@ -8,6 +8,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -58,8 +59,15 @@ SCENARIO_LABEL = {"buying": "Buying", "browsing": "Browsing",
                   "intent_override": "Override", "boundary": "Boundary"}
 
 
-def run_config(cfg: dict, catalog: str, dataset: str,
-               samples, catalog_ids, categories, products) -> dict:
+def run_config(
+    cfg: dict[str, Any],
+    catalog: str,
+    dataset: str,
+    samples: list[dict[str, Any]],
+    catalog_ids: set[str],
+    categories: dict[str, Any],
+    products: dict[str, Any],
+) -> dict[str, Any]:
     agent = Agent(catalog, {k: v for k, v in cfg.items() if k not in ("name", "desc")})
     return evaluate(agent, samples, catalog_ids, categories, products)
 

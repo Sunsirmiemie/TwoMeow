@@ -9,6 +9,7 @@ import math
 import re
 import sqlite3
 import unicodedata
+from typing import Any
 
 from ..dialogue.attribute_stats import extract_attrs
 
@@ -31,7 +32,7 @@ FIELD_WEIGHTS = {
 }
 
 
-def normalize(text) -> str:
+def normalize(text: Any) -> str:
     if isinstance(text, list):
         text = " ".join(str(t) for t in text)
     elif isinstance(text, dict):
@@ -123,6 +124,8 @@ class CatalogIndex:
                     "price": price,
                     "rating_number": _safe_int(p.get("rating_number")),
                     "average_rating": _safe_float(p.get("average_rating")),
+                    # Kept in-memory for the local profile reranker only.
+                    "profile_text": f"{title} {features} {det}",
                 }
 
                 if len(batch) >= 1000:

@@ -1,5 +1,7 @@
 # 实验计划与结果记录
 
+> 历史记录说明：以下“已完成实验”保留用于追溯熵、早停与 Override 的系统改进，不代表当前 rerank。当前方案为保留画像先验的字段感知精确约束覆盖与风险感知 MMR 重排，结果见 `results_rerank_risk_aware_mmr_profile.json`（TechnicalScore 0.813731）。
+
 ## 已完成实验（消融分析）
 
 ### 实验设置
@@ -50,6 +52,7 @@ Early Stop 阈值目前固定 τ=0.3（来自 PDF 理论推导）。
 运行方式：修改 `src/dialogue/early_stop.py` 中 `TAU`，执行 `scripts/run_public_eval.py`。
 
 #### E2: LLM 重排器开启（联网环境）
+> 非当前方案。当前 rerank 不依赖 LLM，且公开集结果使用零 token 本地重排获得。
 当前 `use_llm_ranker=False`。开启后对 MRR 影响最大（31 个 session 的目标商品位于 rank 6-10）。
 
 ```bash
@@ -64,9 +67,7 @@ ANTHROPIC_API_KEY=... python scripts/run_public_eval.py --llm-rank
 文件：`src/retrieval/bm25.py:_apply_slot_filters()`
 
 #### E4: 用户画像接入
-`SessionMemory.preference_tags()` 已实现但从未被调用。
-`src/ranking/profile_prior.py` 是 stub。
-可在检索前用 preference_tags 做候选池预过滤或重排。
+**当前实现**：`profile_prior.py` 在 rerank 阶段读取 `preference_tags` 并做有界本地加分；该画像先验保留在当前方案中。
 
 ### 中期（决赛阶段）
 
@@ -86,6 +87,6 @@ Override 后可重新构建不含旧槽的 clean query。
 
 ## 实验管理规范
 
-- 所有实验结果保存为 `results_*.json`，不覆盖 `results.json`（最优基准）
+- 所有新实验结果保存为独立 `results_*.json`，不覆盖原始 `results.json`；当前 rerank 结果为 `results_rerank_risk_aware_mmr_profile.json`。
 - 修改超参数前先在 `src/config/experiments/` 建独立 yaml
 - 每次实验在本文件追加一行到结果总表

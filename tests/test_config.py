@@ -36,6 +36,9 @@ def test_load_config_flattens_agent_defaults():
         "use_features": True,
         "ranker_model": "claude-haiku-4-5-20251001",
         "rerank_top_n": 20,
+        "mmr_lambda": 1.0,
+        "profile_weight": 0.15,
+        "use_field_aware_slot_coverage": True,
         "feature_weights": {
             "base": 1.0,
             "slot": 0.8,

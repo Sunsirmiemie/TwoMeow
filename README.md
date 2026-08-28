@@ -2,6 +2,8 @@
 
 多轮对话电商搜索 Agent，参赛项目：TechJam 2026 Conversational E-Commerce Search Challenge。
 
+**当前本地 rerank 结果**（公开集 200 条，见 `results_rerank_risk_aware_mmr_profile.json`）：HitRate@10 = **0.905**，MRR = **0.706437**，TechnicalScore = **0.813731**，LLM token = **0**。方案为保留画像先验的字段感知精确约束覆盖与风险感知 MMR 重排。
+
 **仓库历史最佳记录**（公开集 200 条，见 `results_optimal.json`）：HitRate@10 = **0.890**，MRR = **0.555**，TechScore = **0.763**。项目原有说明将该实验记录为无 LLM 重排，但 JSON 本身不包含足以独立验证运行配置的 provenance；本轮也没有重新跑 Dense/LLM。
 
 **本轮可复现 BM25-only 基线**：HitRate@10 = **0.865**，MRR = **0.553**，MTTC = **3.650**，TechScore = **0.745**。完整口径、命令和改动说明见 [`docs/BASELINE_STABILIZATION.md`](docs/BASELINE_STABILIZATION.md)。
@@ -90,9 +92,9 @@ TwoMeow/
 │   │   └── override.py          # Intent Override / Boundary 检测
 │   ├── ranking/
 │   │   ├── scorer.py            # RRF 融合算法
-│   │   ├── reranker.py          # LLM 重排（Claude API，可选）
+│   │   ├── reranker.py          # 本地字段感知 top-20 → top-10 重排（LLM 仅兼容可选路径）
 │   │   ├── features.py          # 商品文本提取
-│   │   └── profile_prior.py     # 用户画像个性化（stub）
+│   │   └── profile_prior.py     # 用户画像先验（本地、确定性）
 │   ├── evaluation/
 │   │   ├── runner.py            # 评测封装
 │   │   ├── analysis.py          # 分数分析
@@ -132,7 +134,7 @@ TwoMeow/
 ② 槽提取    → {material: "cotton", color: "blue", ...}
 ③ 检索      → BM25(100) + Dense(100) → RRF → top-100
 ④ 问题决策  → coverage×entropy 打分 → Early Stop(τ=0.3) → ask_attribute
-⑤ 排序      → 候选截断 → top-10
+⑤ 排序      → 前 20 候选 → 本地字段感知重排 → top-10
 ⑥ 返回      → {recommendations, ask_attribute, message}
 ```
 
@@ -144,6 +146,7 @@ TwoMeow/
 - 动态熵属性选择：每轮基于候选池实时打分，选 coverage×entropy 最高的属性提问
 - Early Stop（τ=0.3）：候选池收敛时改问通配符，消除无效轮次，MTTC 从 5.1 降至 3.4
 - 意图突变重置：精确检测 Override 信号，原子级清空旧槽，重新建立搜索上下文
+- 字段感知重排：按确认槽位在 title/categories/features/details 中的覆盖率推进精确匹配商品
 
 详见 `docs/architecture.md`、`docs/innovation.md` 和 `docs/BASELINE_STABILIZATION.md`。
 
@@ -161,6 +164,7 @@ agent = Agent("data/catalog.jsonl", {
     "use_override_detection": True,
     "use_llm_ranker": False,      # 开启需要 ANTHROPIC_API_KEY
     "ranker_model": "claude-haiku-4-5-20251001",
+    "use_field_aware_slot_coverage": True,
 })
 ```
 
@@ -173,7 +177,7 @@ agent = Agent("data/catalog.jsonl", {
 - BM25 与全部对话策略均在本地运行
 - Dense 推理在本地执行，但首次加载模型仍要求模型已安装/缓存；严格离线复现请使用 `--no-dense`
 
-推荐离线重排替代方案：`cross-encoder/ms-marco-MiniLM-L-6-v2`（~25MB，详见 `docs/experiment_plan.md`）
+默认离线重排不需要下载模型：以字段感知的确认约束覆盖、画像先验和风险感知 MMR 对 top-20 候选重排。
 
 ---
 

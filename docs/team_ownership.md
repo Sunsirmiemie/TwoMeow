@@ -9,7 +9,7 @@
 | Dense 检索 | `src/retrieval/dense.py` | TBD | sentence-transformers 嵌入、缓存策略 |
 | 混合检索 & 融合 | `src/retrieval/hybrid.py` `src/ranking/scorer.py` | TBD | RRF 融合、Buying/Browsing 轨道权重 |
 | 澄清策略 | `src/dialogue/entropy.py` `src/dialogue/question_policy.py` `src/dialogue/early_stop.py` | TBD | 动态熵打分、Early Stop τ=0.3 |
-| 排序器 | `src/ranking/reranker.py` `src/ranking/profile_prior.py` | TBD | LLM 重排、用户画像接入（stub） |
+| 排序器 | `src/ranking/reranker.py` `src/ranking/profile_prior.py` | TBD | 本地字段感知重排、用户画像先验、风险感知 MMR；LLM 路径仅兼容可选 |
 | 评测 & 分析 | `src/evaluation/` `scripts/` | TBD | 消融实验、失败分析、脚本维护 |
 | 编排 & 接口 | `src/agent/orchestrator.py` `starter/agent.py` | TBD | 主流程、官方接口兼容 |
 
@@ -27,12 +27,12 @@
 
 ## 待认领任务
 
-以下功能已有 stub，需要负责人跟进实现：
+以下是后续优化项；用户画像先验已接入当前 rerank，不再是 stub：
 
 | 任务 | 文件 | 优先级 |
 |------|------|--------|
 | slot_filter 扩展（material/color 硬过滤） | `src/retrieval/bm25.py` | 高 |
-| 用户画像个性化 | `src/ranking/profile_prior.py` | 中 |
+| 画像先验在私有集的稳健性验证 | `src/ranking/profile_prior.py` | 中 |
 | 离线 cross-encoder 重排 | `src/ranking/reranker.py` | 中（决赛） |
 | τ 超参数扫描 | `src/dialogue/early_stop.py` | 低 |
 
@@ -42,5 +42,5 @@
 - [ ] `.env.example` 存在，`.env` 未提交
 - [ ] `data/catalog.jsonl` 在 `.gitignore` 中（大文件）
 - [ ] 所有测试通过：`python tests/test_*.py`
-- [ ] `results.json` 已更新为最优配置的分数
+- [ ] `results_rerank_risk_aware_mmr_profile.json` 已记录当前 rerank 方案分数
 - [ ] `docs/` 文档与实际代码保持同步

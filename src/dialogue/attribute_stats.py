@@ -6,6 +6,7 @@ All patterns mirror evaluator's classify_constraint() to ensure consistency
 from __future__ import annotations
 
 import re
+from typing import Any
 
 # Attributes the evaluator's classify_constraint() can return.
 # 'category' and 'brand' excluded — evaluator never classifies them.
@@ -65,7 +66,7 @@ def first_match(pattern: re.Pattern, *texts: str) -> str | None:
     return None
 
 
-def budget_bucket(price) -> str | None:
+def budget_bucket(price: Any) -> str | None:
     if price is None:
         return None
     try:
@@ -91,7 +92,7 @@ def extract_attrs(
     searchable: str,
     features: str,
     details: str,
-    price,
+    price: Any,
 ) -> dict[str, str | None]:
     """Build attribute dict for one product — used by catalog loader for attr_cache."""
     return {

@@ -4,10 +4,12 @@ Separated from orchestrator to keep Agent class under the 200-line limit.
 """
 from __future__ import annotations
 
+from typing import Any
+
 _HISTORY_NOISE = {"use your judgment", "not quite right"}
 
 
-def build_query(user_message: str, session) -> str:
+def build_query(user_message: str, session: Any) -> str:
     """Build retrieval query: slot values (doubled for BM25 weight) + filtered history + message."""
     slot_text = " ".join(session.slots.values())
     useful_history = [
@@ -17,7 +19,7 @@ def build_query(user_message: str, session) -> str:
     return f"{slot_text} {slot_text} {user_message} {' '.join(useful_history)}".strip()
 
 
-def build_message(ask_attribute: str | None, ranked: list) -> str:
+def build_message(ask_attribute: str | None, ranked: list[dict[str, Any]]) -> str:
     if ask_attribute:
         return f"Here are some options. Could you tell me your preference for {ask_attribute}?"
     if ranked:

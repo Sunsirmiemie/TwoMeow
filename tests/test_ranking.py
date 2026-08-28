@@ -22,6 +22,35 @@ def test_ranker_disabled_passthrough():
     assert result[0]["parent_asin"] == cands[0]["parent_asin"]
 
 
+def test_model_free_rerank_only_considers_retrieval_top_n():
+    """A high-scoring item after rank 20 must not enter the final top 10."""
+    ranker = Ranker({"use_features": True, "rerank_top_n": 20})
+    session = SessionMemory({})
+    cands = _candidates(21)
+    cands[-1]["score"] = 9999.0
+
+    result = ranker.rerank(cands, session, top_k=10)
+
+    assert len(result) == 10
+    assert "B020" not in [item["parent_asin"] for item in result]
+
+
+def test_profile_prior_promotes_matching_catalogue_text():
+    ranker = Ranker(
+        {"profile_weight": 1.0, "feature_weights": {"base": 1.0}},
+        title_lookup={"B000": "formal dress", "B001": "comfortable running shoes"},
+    )
+    session = SessionMemory({"preference_tags": ["comfort"]})
+    candidates = [
+        {"parent_asin": "B000", "score": 1.0},
+        {"parent_asin": "B001", "score": 0.9},
+    ]
+
+    result = ranker.rerank(candidates, session, top_k=2)
+
+    assert result[0]["parent_asin"] == "B001"
+
+
 def test_ranker_empty_candidates():
     r = Ranker({})
     session = SessionMemory({})

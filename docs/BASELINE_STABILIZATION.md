@@ -1,5 +1,7 @@
 # TwoMeow 基线稳定化说明
 
+> 历史稳定化记录（2026-08-27）：本文件不描述后续 rerank 改动。`results.json` 保留为原始下载时旧结果；当前 rerank 结果位于 `results_rerank_risk_aware_mmr_profile.json`。
+
 ## 1. 状态与边界
 
 - 工作分支：`stabilize-baseline`

@@ -5,6 +5,8 @@ Never asks 'category' or 'brand' — evaluator's classify_constraint() cannot re
 """
 from __future__ import annotations
 
+from typing import Any
+
 from .attribute_stats import SCOREABLE_ATTRS, GLOBAL_ENTROPY
 from .entropy import MIN_POOL_FOR_DYNAMIC, score_attribute
 
@@ -15,10 +17,10 @@ class Clarifier:
 
     def next_ask(
         self,
-        session,
+        session: Any,
         candidates: list[dict] | None = None,
         attr_cache: dict[str, dict] | None = None,
-    ) -> str:
+    ) -> str | None:
         asked = set(session.asked_attributes)
         known = set(session.slots.keys())
         eligible = [a for a in SCOREABLE_ATTRS if a not in asked and a not in known]

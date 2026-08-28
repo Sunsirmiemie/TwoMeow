@@ -30,6 +30,12 @@ ranking:
   use_features: true
   ranker_model: "claude-haiku-4-5-20251001"
   rerank_top_n: 20
+  # Relevance-first MMR: 1.0 disables diversity; lower values discourage duplicates.
+  mmr_lambda: 1.0
+  # Weight for overlap between profile preference_tags and product text.
+  profile_weight: 0.15
+  # C-version exact slot coverage across title/category/feature/detail fields.
+  use_field_aware_slot_coverage: true
   feature_weights:
     base: 1.0
     slot: 0.8

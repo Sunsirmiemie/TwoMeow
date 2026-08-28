@@ -11,6 +11,7 @@ Scenarios (fixed ratio 40/40/15/5):
 from __future__ import annotations
 
 import re
+from typing import Any
 
 _OVERRIDE_RE = re.compile(r"ignore my earlier preference", re.I)
 _BOUNDARY_RE = re.compile(r"please use your judgment", re.I)
@@ -19,7 +20,7 @@ _BROWSING_RE = re.compile(r"still exploring", re.I)
 
 
 class IntentRouter:
-    def update_scenario(self, message: str, session) -> None:
+    def update_scenario(self, message: str, session: Any) -> None:
         """Update session.scenario_type and flags based on current message."""
 
         # Override signal — fires mid-session, must clear slots

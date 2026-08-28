@@ -7,6 +7,8 @@ guessing blindly from a vague pool (MD §III / §VII in-scope).
 """
 from __future__ import annotations
 
+from typing import Any
+
 _FEW_SLOTS_THRESHOLD = 2
 _POOL_SIZE_THRESHOLD = 50
 _TRUNCATED_SIZE      = 20
@@ -14,7 +16,7 @@ _TRUNCATED_SIZE      = 20
 
 def build_rerank_pool(
     candidates: list[dict],
-    session,
+    session: Any,
     few_slots_threshold: int = _FEW_SLOTS_THRESHOLD,
     pool_size_threshold: int = _POOL_SIZE_THRESHOLD,
     truncated_size: int = _TRUNCATED_SIZE,
