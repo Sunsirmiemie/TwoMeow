@@ -124,8 +124,11 @@ class CatalogIndex:
                     "price": price,
                     "rating_number": _safe_int(p.get("rating_number")),
                     "average_rating": _safe_float(p.get("average_rating")),
+                    "store": normalize(p.get("store", "")),
                     # Kept in-memory for the local profile reranker only.
                     "profile_text": f"{title} {features} {det}",
+                    # Extended text is used only by the dynamic attribute scorer.
+                    "attribute_text": f"{title} {features} {det} {desc}",
                 }
 
                 if len(batch) >= 1000:

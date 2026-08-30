@@ -11,18 +11,11 @@ from __future__ import annotations
 import json
 import math
 import os
-import re
 from typing import Any
 
 from .profile_prior import apply_profile_boost
-
-_STOP = {
-    "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from",
-    "i", "in", "is", "it", "me", "my", "of", "on", "or", "please", "some",
-    "that", "the", "this", "to", "want", "with", "would", "you", "looking",
-    "for", "color", "size", "style", "material", "feature", "use", "case",
-    "budget", "brand",
-}
+from .dynamic_attributes import score_attribute_compatibility
+from .mmr import select_mmr, tokenize
 
 _PROMPT = """\
 You are a shopping assistant. Rerank the following products by how likely they match the user's need.
@@ -45,6 +38,7 @@ class Ranker:
         client=None,
         categories: dict[str, list[str]] | None = None,
         meta: dict[str, dict] | None = None,
+        attr_cache: dict[str, dict] | None = None,
     ):
         self.enabled   = config.get("use_llm_ranker", False)
         self.top_n     = config.get("rerank_top_n", 20)
@@ -52,6 +46,7 @@ class Ranker:
         self._titles   = title_lookup or {}
         self._categories = categories or {}
         self._meta     = meta or {}
+        self._attr_cache = attr_cache or {}
         self._client   = client
         self._prompt_tokens     = 0
         self._completion_tokens = 0
@@ -66,6 +61,9 @@ class Ranker:
         self.profile_weight = float(config.get("profile_weight", 0.15))
         self.use_field_aware_slot_coverage = bool(
             config.get("use_field_aware_slot_coverage", True)
+        )
+        self.use_dynamic_attribute_scoring = bool(
+            config.get("use_dynamic_attribute_scoring", False)
         )
 
     def _get_client(self):
@@ -127,12 +125,6 @@ class Ranker:
                 return self._rerank_features(pool, session, top_k)
             return pool[:top_k]
 
-    def _tokenize(self, text: str) -> set[str]:
-        return {
-            token for token in re.findall(r"[a-z0-9]+", text.lower())
-            if len(token) > 1 and token not in _STOP
-        }
-
     def _effective_mmr_lambda(self) -> float:
         """Cap diversity at the validated risk-aware top-k operating point.
 
@@ -168,7 +160,7 @@ class Ranker:
         )
         slots = session.slots
         effective_lambda = self._effective_mmr_lambda()
-        slot_tokens = self._tokenize(" ".join(slots.values()))
+        slot_tokens = tokenize(" ".join(slots.values()))
         category = slots.get("category")
         anchor = None
         if category:
@@ -189,15 +181,26 @@ class Ranker:
         ) or 1.0
 
         w = self.feature_weights
+        compatibility: dict[str, float] = {}
+        violations: dict[str, float] = {}
+        if self.use_dynamic_attribute_scoring:
+            compatibility, violations, _ = score_attribute_compatibility(
+                candidates,
+                session,
+                self._attr_cache,
+                self._titles,
+                self._categories,
+                self._meta,
+            )
         scored: list[tuple[float, dict, set[str]]] = []
         for candidate in candidates:
             asin = candidate["parent_asin"]
             meta = self._meta.get(asin, {})
             cats = self._categories.get(asin, [])
-            title_category_tokens = self._tokenize(
+            title_category_tokens = tokenize(
                 (self._titles.get(asin, "") or "") + " " + " ".join(cats)
             )
-            text_tokens = title_category_tokens | self._tokenize(
+            text_tokens = title_category_tokens | tokenize(
                 str(meta.get("profile_text") or "")
             )
             if self.use_field_aware_slot_coverage:
@@ -215,34 +218,24 @@ class Ranker:
             if budget is not None and price is not None:
                 price_sim = max(0.0, 1.0 - abs(price - budget) / max(budget, 1.0))
             base_norm = float(candidate.get("score") or 0.0) / base_max
-            final = (
-                w.get("base", 1.0) * base_norm
-                + w.get("slot", 2.2) * slot_score
-                + w.get("category", 1.8) * category_match
-                + w.get("popularity", 0.3) * popularity
-                + w.get("price", 0.6) * price_sim
-            )
+            if self.use_dynamic_attribute_scoring and compatibility:
+                final = (
+                    w.get("base", 1.0) * base_norm
+                    + w.get("attribute", 1.6) * compatibility.get(asin, 0.0)
+                    - w.get("negative", 1.4) * violations.get(asin, 0.0)
+                    + w.get("popularity", 0.3) * popularity
+                )
+            else:
+                final = (
+                    w.get("base", 1.0) * base_norm
+                    + w.get("slot", 2.2) * slot_score
+                    + w.get("category", 1.8) * category_match
+                    + w.get("popularity", 0.3) * popularity
+                    + w.get("price", 0.6) * price_sim
+                )
             scored.append((final, candidate, text_tokens))
 
-        # Greedy MMR selection from the fixed retrieval top-20 pool.
-        selected: list[tuple[float, dict, set[str]]] = []
-        remaining = scored[:]
-        while remaining and len(selected) < top_k:
-            if not selected:
-                best_index = max(range(len(remaining)), key=lambda i: remaining[i][0])
-            else:
-                def mmr_value(item: tuple[float, dict, set[str]]) -> float:
-                    relevance, _, tokens = item
-                    max_similarity = max(
-                        len(tokens & chosen_tokens) / (len(tokens | chosen_tokens) or 1)
-                        for _, _, chosen_tokens in selected
-                    )
-                    return effective_lambda * relevance - (1.0 - effective_lambda) * max_similarity
-
-                best_index = max(range(len(remaining)), key=lambda i: mmr_value(remaining[i]))
-            selected.append(remaining.pop(best_index))
-
-        return [candidate for _, candidate, _ in selected]
+        return select_mmr(scored, top_k, effective_lambda)
 
     @property
     def token_usage(self) -> dict:

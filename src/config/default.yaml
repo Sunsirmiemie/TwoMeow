@@ -3,6 +3,10 @@
 
 retrieval:
   top_k: 100
+  # Recompute BM25 field weights and product compatibility from all evidence.
+  use_dynamic_attribute_scoring: true
+  dynamic_field_gain: 0.65
+  dynamic_attribute_max_weight: 0.52
   field_weights:
     title: 6.0
     categories: 4.0
@@ -19,11 +23,24 @@ fusion:
   browsing_weights:
     - [0.50, 0.50]
     - [0.60, 0.40]
+  # Calibrate source weights from current-result confidence and accumulated evidence.
+  use_adaptive_fusion: true
+  # Dense is a fallback when lexical recall is weak, not mandatory noise.
+  use_dense_risk_gate: true
+  dense_gate_min_bm25: 20
+  dense_gate_max_confidence: 0.12
 
 dense:
   use_dense: true
   model: "all-MiniLM-L6-v2"
   batch_size: 512
+  max_seq_length: 256
+  # "auto" keeps the submission portable; experiments can force "mps".
+  device: "auto"
+  query_prefix: ""
+  document_prefix: ""
+  # Encode identity and attribute fields independently; never concatenate vectors.
+  use_field_aware_dense: true
 
 ranking:
   use_llm_ranker: false
@@ -38,12 +55,17 @@ ranking:
   use_field_aware_slot_coverage: true
   feature_weights:
     base: 1.0
+    attribute: 1.6
+    negative: 1.4
     slot: 0.8
     category: 1.0
     popularity: 0.15
     price: 0.4
 
 dialogue:
+  use_reply_purification: true
+  # Unrelated pre-override evidence becomes a weak prior, never a hard filter.
+  override_carryover_confidence: 0.35
   entropy_tau: 0.3          # early-stop threshold from PDF §V (ablation: τ=0.3 optimal)
   min_pool_for_dynamic: 10  # minimum pool size for reliable entropy estimation
   few_slots_threshold: 2    # pool truncation trigger

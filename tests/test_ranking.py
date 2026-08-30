@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.ranking.reranker import Ranker
 from src.retrieval.candidate_builder import build_rerank_pool
 from src.agent.state import SessionMemory
+from src.ranking.dynamic_attributes import score_attribute_compatibility
 
 
 def _candidates(n: int) -> list[dict]:
@@ -176,6 +177,40 @@ def test_build_rerank_pool_small_pool():
     cands = _candidates(30)       # below threshold
     pool = build_rerank_pool(cands, session)
     assert len(pool) == 30
+
+
+def test_dynamic_attribute_weights_change_with_current_candidate_pool():
+    session = SessionMemory({})
+    session.slots = {"color": "red", "material": "cotton"}
+    session.slot_confidence = {"color": 1.0, "material": 1.0}
+    candidates = _candidates(3)
+    titles = {
+        "B000": "red cotton shirt",
+        "B001": "red wool shirt",
+        "B002": "blue wool shirt",
+    }
+    compatibility, _, weights = score_attribute_compatibility(
+        candidates, session, {}, titles, {}, {},
+    )
+
+    assert weights["material"] > weights["color"]
+    assert compatibility["B000"] > compatibility["B001"] > compatibility["B002"]
+
+
+def test_negative_attribute_evidence_penalizes_matching_product():
+    session = SessionMemory({})
+    session.negative_slots = {"color": {"red"}}
+    candidates = _candidates(2)
+    _, violations, _ = score_attribute_compatibility(
+        candidates,
+        session,
+        {},
+        {"B000": "red shirt", "B001": "blue shirt"},
+        {},
+        {},
+    )
+
+    assert violations["B000"] > violations["B001"]
 
 
 if __name__ == "__main__":

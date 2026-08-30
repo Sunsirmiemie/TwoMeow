@@ -17,6 +17,9 @@ def test_load_config_flattens_agent_defaults():
 
     assert config == {
         "retrieval_top_k": 100,
+        "use_dynamic_attribute_scoring": True,
+        "dynamic_field_gain": 0.65,
+        "dynamic_attribute_max_weight": 0.52,
         "field_weights": {
             "title": 6.0,
             "categories": 4.0,
@@ -29,9 +32,18 @@ def test_load_config_flattens_agent_defaults():
         "bm25_base": 0.75,
         "dense_base": 0.25,
         "browsing_weights": [[0.5, 0.5], [0.6, 0.4]],
+        "use_adaptive_fusion": True,
+        "use_dense_risk_gate": True,
+        "dense_gate_min_bm25": 20,
+        "dense_gate_max_confidence": 0.12,
         "use_dense": True,
         "dense_model": "all-MiniLM-L6-v2",
         "dense_batch_size": 512,
+        "dense_max_seq_length": 256,
+        "dense_device": "auto",
+        "dense_query_prefix": "",
+        "dense_document_prefix": "",
+        "use_field_aware_dense": True,
         "use_llm_ranker": False,
         "use_features": True,
         "ranker_model": "claude-haiku-4-5-20251001",
@@ -41,12 +53,16 @@ def test_load_config_flattens_agent_defaults():
         "use_field_aware_slot_coverage": True,
         "feature_weights": {
             "base": 1.0,
+            "attribute": 1.6,
+            "negative": 1.4,
             "slot": 0.8,
             "category": 1.0,
             "popularity": 0.15,
             "price": 0.4,
         },
         "entropy_tau": 0.3,
+        "use_reply_purification": True,
+        "override_carryover_confidence": 0.35,
         "min_pool_for_dynamic": 10,
         "few_slots_threshold": 2,
         "pool_size_threshold": 50,
@@ -164,12 +180,16 @@ def test_agent_passes_dense_model_and_batch_size_to_encoder(tmp_path, monkeypatc
     from src.agent.orchestrator import Agent
 
     encode_calls = []
+    encoded_texts = []
 
     class FakeModel:
-        def __init__(self, model_name):
+        def __init__(self, model_name, **kwargs):
             self.model_name = model_name
+            self.device = kwargs.get("device", "cpu")
+            self.max_seq_length = None
 
         def encode(self, texts, **kwargs):
+            encoded_texts.append(list(texts))
             encode_calls.append(kwargs)
             return np.ones((len(texts), 2))
 
@@ -191,12 +211,40 @@ def test_agent_passes_dense_model_and_batch_size_to_encoder(tmp_path, monkeypatc
             "use_dense": True,
             "dense_model": "fake-encoder",
             "dense_batch_size": 7,
+            "dense_max_seq_length": 123,
+            "dense_device": "mps",
+            "dense_query_prefix": "query: ",
+            "dense_document_prefix": "passage: ",
         },
     )
+    # Dense is intentionally lazy so a strong BM25 result does not pay model
+    # loading/index costs; force creation here to verify encoder configuration.
+    agent.retriever._get_dense()
 
     assert agent.retriever.dense.model_name == "fake-encoder"
     assert agent.retriever.dense.batch_size == 7
+    assert agent.retriever.dense.max_seq_length == 123
+    assert agent.retriever.dense.model.max_seq_length == 123
+    assert agent.retriever.dense.requested_device == "mps"
+    assert agent.retriever.dense.device == "mps"
+    assert agent.retriever.dense.query_prefix == "query: "
+    assert agent.retriever.dense.document_prefix == "passage: "
     assert encode_calls[0]["batch_size"] == 7
+    assert len(encode_calls) == 2
+    assert all(texts[0].startswith("passage: ") for texts in encoded_texts)
+    assert agent.retriever.dense.embeddings is None
+    assert agent.retriever.dense.identity_embeddings is not None
+    assert agent.retriever.dense.attribute_embeddings is not None
+
+    session = SimpleNamespace(
+        slots={"category": "lighting", "color": "black"},
+        slot_confidence={"category": 1.0, "color": 1.0},
+    )
+    agent.retriever.dense.search("desk lamp", top_k=1, session=session)
+    assert encoded_texts[-1] == [
+        "query: lighting desk lamp",
+        "query: black desk lamp",
+    ]
 
 
 def test_agent_applies_rerank_pool_threshold_overrides(tmp_path):

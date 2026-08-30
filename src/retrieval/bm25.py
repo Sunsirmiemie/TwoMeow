@@ -9,6 +9,10 @@ import sqlite3
 from collections.abc import Mapping
 
 from .catalog import CatalogIndex, FIELD_WEIGHTS, clean_query
+from ..ranking.dynamic_attributes import (
+    dynamic_bm25_field_weights,
+    rescore_retrieval_candidates,
+)
 
 
 class BM25Retriever:
@@ -16,11 +20,18 @@ class BM25Retriever:
         self,
         catalog_path: str,
         field_weights: Mapping[str, float] | None = None,
+        use_dynamic_attribute_scoring: bool = False,
+        dynamic_field_gain: float = 0.65,
+        dynamic_attribute_max_weight: float = 0.52,
     ):
         self._index = CatalogIndex(catalog_path)
         self.field_weights = dict(
             FIELD_WEIGHTS if field_weights is None else field_weights
         )
+        self.use_dynamic_attribute_scoring = use_dynamic_attribute_scoring
+        self.dynamic_field_gain = dynamic_field_gain
+        self.dynamic_attribute_max_weight = dynamic_attribute_max_weight
+        self.last_field_weights = dict(self.field_weights)
 
     # ── Cache proxies for HybridRetriever / Ranker ────────────────────────────
 
@@ -42,12 +53,25 @@ class BM25Retriever:
 
     # ── Search ────────────────────────────────────────────────────────────────
 
-    def search(self, query: str, slots: dict, intent: str, top_k: int = 100) -> list[dict]:
+    def search(
+        self,
+        query: str,
+        slots: dict,
+        intent: str,
+        top_k: int = 100,
+        session=None,
+    ) -> list[dict]:
         expression = clean_query(query)
         if not expression:
             return []
 
-        weight_str = ", ".join(str(w) for w in self.field_weights.values())
+        weights = self.field_weights
+        if self.use_dynamic_attribute_scoring:
+            weights = dynamic_bm25_field_weights(
+                self.field_weights, session, self.dynamic_field_gain,
+            )
+        self.last_field_weights = dict(weights)
+        weight_str = ", ".join(str(weights[key]) for key in FIELD_WEIGHTS)
         sql = f"""
             SELECT parent_asin, price,
                    bm25(products, 0, {weight_str}) AS score
@@ -68,6 +92,16 @@ class BM25Retriever:
         ]
         if intent == "buying":
             results = self._apply_slot_filters(results, slots)
+        if self.use_dynamic_attribute_scoring and session is not None:
+            results = rescore_retrieval_candidates(
+                results,
+                session,
+                self._index.attr_cache,
+                self._index.titles,
+                self._index.categories,
+                self._index.meta,
+                self.dynamic_attribute_max_weight,
+            )
         return results[:top_k]
 
     def _buying_expression(self, slots: dict, query: str) -> str:

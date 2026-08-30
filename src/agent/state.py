@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import re
 
+from ..dialogue.purification import PurifiedReply, purify_reply
+from ..dialogue.override_memory import restore_unrelated_override_evidence
 # ── Constraint vocabulary (mirrors evaluator constants exactly) ───────────────
 
 MATERIALS = frozenset((
@@ -110,7 +112,6 @@ def _fallback_extract(text: str) -> dict[str, str]:
 
 
 # ── Session state ─────────────────────────────────────────────────────────────
-
 class SessionMemory:
     def __init__(self, user_profile: dict):
         self.user_profile = user_profile
@@ -123,16 +124,47 @@ class SessionMemory:
         self.other_asked: bool = False
         self.last_reply_new_info: bool = True
         self.no_info_streak: int = 0
+        self.negative_slots: dict[str, set[str]] = {}
+        self.no_preference_slots: set[str] = set()
+        self.slot_confidence: dict[str, float] = {}
+        self.slot_turns: dict[str, int] = {}
+        self.context_start_turn: int = 0
+        self.last_query_text: str = ""
+        self.use_reply_purification: bool = True
+        self.override_snapshot: dict | None = None
+        self.override_carryover_confidence: float = 0.35
 
-    def add_turn(self, message: str, recommendations: list) -> None:
+    def add_turn(
+        self,
+        message: str,
+        recommendations: list,
+        query_text: str | None = None,
+    ) -> None:
         self.history.append({
             "turn": len(self.history) + 1,
             "message": message,
+            "query_text": message if query_text is None else query_text,
             "top_asin": recommendations[0]["parent_asin"] if recommendations else None,
         })
 
     def accumulated_text(self) -> str:
-        return " ".join(t["message"] for t in self.history)
+        return " ".join(
+            t.get("query_text", t["message"])
+            for t in self.history[self.context_start_turn:]
+        )
+
+    def constraint_context(self) -> dict:
+        """Return a read-only-style snapshot for retrieval and ranking."""
+        return {
+            "slots": dict(self.slots),
+            "negative_slots": {
+                key: set(values) for key, values in self.negative_slots.items()
+            },
+            "no_preference_slots": set(self.no_preference_slots),
+            "slot_confidence": dict(self.slot_confidence),
+            "slot_turns": dict(self.slot_turns),
+            "turn": self.turn_count + 1,
+        }
 
     @property
     def turn_count(self) -> int:
@@ -148,43 +180,71 @@ class SessionMemory:
 
 
 # ── Slot tracker ──────────────────────────────────────────────────────────────
-
 class SlotTracker:
     """Parses evaluator messages and updates session slots."""
 
-    def __init__(self, session: SessionMemory):
+    def __init__(self, session: SessionMemory, use_purification: bool = True):
         self.session = session
+        self.use_purification = use_purification
+
+    def _record_purified_evidence(self, reply: PurifiedReply) -> None:
+        for attribute in reply.no_preference_attributes:
+            self.session.no_preference_slots.add(attribute)
+            self.session.slots.pop(attribute, None)
+            self.session.slot_confidence.pop(attribute, None)
+            self.session.slot_turns.pop(attribute, None)
+        for attribute, values in reply.excluded_values.items():
+            self.session.negative_slots.setdefault(attribute, set()).update(values)
+
+    def _record_positive_evidence(
+        self,
+        parsed: dict[str, str],
+        confidence: float,
+    ) -> None:
+        current_turn = self.session.turn_count + 1
+        for attribute, value in parsed.items():
+            self.session.slots[attribute] = value
+            self.session.no_preference_slots.discard(attribute)
+            self.session.negative_slots.get(attribute, set()).discard(value.lower())
+            self.session.slot_confidence[attribute] = confidence
+            self.session.slot_turns[attribute] = current_turn
 
     def extract_and_update(self, message: str) -> bool:
         """Parse a message into slots. Returns True if any slot value changed."""
-        before = set(self.session.slots.items())
+        before = self.session.constraint_context()
+        reply = purify_reply(message) if self.use_purification else PurifiedReply(message)
+        self.session.last_query_text = reply.query_text
+        self._record_purified_evidence(reply)
+        positive_text = reply.query_text
 
         if "category" not in self.session.slots:
-            m = _LOOKING_RE.search(message)
+            m = _LOOKING_RE.search(positive_text)
             if m:
                 category = re.sub(r"\s+", " ", m.group(1)).strip()
                 if category and category.lower() not in ("clothing", "clothing shoes & jewelry"):
-                    self.session.slots["category"] = category
+                    self._record_positive_evidence({"category": category}, 0.9)
 
-        # IntentRouter has already handled override (slot clear) before this runs.
-        m = _MATTERS_RE.search(message)
+        parsed: dict[str, str]
+        confidence = 0.75
+        m = _MATTERS_RE.search(positive_text)
         if m:
-            self.session.slots.update(_parse_constraint_list(m.group(1)))
-            return set(self.session.slots.items()) != before
-        m = _NEED_RE.search(message)
-        if m:
-            self.session.slots.update(_parse_constraint_list(m.group(1)))
-            return set(self.session.slots.items()) != before
-        m = _REQUIREMENT_RE.search(message)
-        if m:
-            self.session.slots.update(_parse_constraint_list(m.group(1)))
-            self.session.slots.update(
-                {k: v for k, v in _fallback_extract(message).items()
-                 if k not in self.session.slots}
-            )
-            return set(self.session.slots.items()) != before
-        # Generic text — regex fallback, never overwrite confirmed structured slots
-        for k, v in _fallback_extract(message).items():
-            if k not in self.session.slots:
-                self.session.slots[k] = v
-        return set(self.session.slots.items()) != before
+            parsed = _parse_constraint_list(m.group(1))
+            confidence = 1.0
+        elif m := _NEED_RE.search(positive_text):
+            parsed = _parse_constraint_list(m.group(1))
+            confidence = 1.0
+        elif m := _REQUIREMENT_RE.search(positive_text):
+            parsed = _parse_constraint_list(m.group(1))
+            parsed.update({
+                key: value for key, value in _fallback_extract(positive_text).items()
+                if key not in parsed and key not in self.session.slots
+            })
+            confidence = 1.0
+        else:
+            parsed = {
+                key: value for key, value in _fallback_extract(positive_text).items()
+                if key not in self.session.slots
+            }
+        self._record_positive_evidence(parsed, confidence)
+        restore_unrelated_override_evidence(self.session, parsed, reply)
+        return self.session.constraint_context() != before

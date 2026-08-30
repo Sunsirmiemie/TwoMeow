@@ -10,13 +10,24 @@ _HISTORY_NOISE = {"use your judgment", "not quite right"}
 
 
 def build_query(user_message: str, session: Any) -> str:
-    """Build retrieval query: slot values (doubled for BM25 weight) + filtered history + message."""
-    slot_text = " ".join(session.slots.values())
-    useful_history = [
-        t["message"] for t in session.history[-3:]
-        if not any(noise in t["message"] for noise in _HISTORY_NOISE)
+    """Build a retrieval query from active, purified conversational evidence."""
+    strong_slots = [
+        value for key, value in session.slots.items()
+        if session.slot_confidence.get(key, 1.0) >= 0.5
     ]
-    return f"{slot_text} {slot_text} {user_message} {' '.join(useful_history)}".strip()
+    weak_slots = [
+        value for key, value in session.slots.items()
+        if session.slot_confidence.get(key, 1.0) < 0.5
+    ]
+    strong_text = " ".join(strong_slots)
+    slot_text = f"{strong_text} {strong_text} {' '.join(weak_slots)}"
+    useful_history = [
+        t.get("query_text", t["message"])
+        for t in session.history[session.context_start_turn:][-3:]
+        if not any(noise in t["message"].lower() for noise in _HISTORY_NOISE)
+    ]
+    current = session.last_query_text or user_message
+    return f"{slot_text} {current} {' '.join(useful_history)}".strip()
 
 
 def build_message(ask_attribute: str | None, ranked: list[dict[str, Any]]) -> str:
