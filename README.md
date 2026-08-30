@@ -2,7 +2,7 @@
 
 多轮对话电商搜索 Agent，参赛项目：TechJam 2026 Conversational E-Commerce Search Challenge。
 
-**当前默认结果**（公开集 200 条，`PYTHONHASHSEED=0`）：HitRate@10 = **0.955**，MRR = **0.706129**，MTTC = **2.865**，TechnicalScore = **0.852039**，LLM token = **0**。相对更新仓库原始公开集结果（0.905 / 0.706437 / 3.535 / 0.813731），命中率提高 5 个百分点、MTTC 缩短 0.67 轮、技术分提高 0.038308。
+**当前默认结果**（公开集 200 条，`PYTHONHASHSEED=0`，BM25-only，无 LLM）：HitRate@10 = **0.955**，MRR = **0.706546**，MTTC = **2.865**，Efficiency = **0.8135**，TechnicalScore = **0.852164**，token = **0**。相对更新仓库原始公开集结果（0.905 / 0.706437 / 3.535 / 0.813731），命中率提高 5 个百分点、MTTC 缩短 0.67 轮、技术分提高 0.038433。
 
 **泛化警告**：第二组完全隔离的 400-ASIN 最终盲测中，当前版本 TechnicalScore 为 `0.750553`，低于原版 BM25 的 `0.760657`。因此上面的公开集提升不能被表述为已经证明的泛化提升；当前三项优化仍应视为实验方案。
 
@@ -28,7 +28,6 @@ source .venv/bin/activate
 
 pip install .              # 核心：BM25 + 配置加载
 pip install '.[dense]'     # 可选：Dense 检索
-pip install '.[llm]'       # 可选：LLM 重排
 pip install '.[test]'      # 可选：测试、构建与制品校验
 ```
 
@@ -37,18 +36,14 @@ pip install '.[test]'      # 可选：测试、构建与制品校验
 ### 本地评测
 
 ```bash
-# 默认配置评测：Dense 风险门控；强 BM25 场景不会加载 Dense
-python scripts/run_public_eval.py --output /tmp/twomeow-default.json
+# 标准评测（推荐）：BM25-only，完全可复现，零 token
+PYTHONHASHSEED=0 python scripts/run_public_eval.py --no-dense --output /tmp/twomeow-result.json
 
-# BM25 only（可复现、更快，无需 sentence-transformers；避免覆盖仓库结果）
-python scripts/run_public_eval.py --no-dense --output /tmp/twomeow-bm25.json
+# 默认配置评测：开启 Dense 风险门控（首次运行需下载 sentence-transformers 模型）
+python scripts/run_public_eval.py --output /tmp/twomeow-default.json
 
 # 诊断用途：强制绕过风险门控（公开集上会明显降分）
 python scripts/run_public_eval.py --force-dense --output /tmp/twomeow-forced-dense.json
-
-# 开启 LLM 重排（需要 ANTHROPIC_API_KEY）
-export ANTHROPIC_API_KEY=sk-ant-...
-python scripts/run_public_eval.py --llm-rank --output /tmp/twomeow-llm.json
 ```
 
 ### 消融实验
@@ -184,7 +179,7 @@ agent = Agent("data/catalog.jsonl", {
     "use_dynamic_entropy": True,  # 动态熵属性选择
     "use_early_stop": True,       # 熵阈值早停
     "use_override_detection": True,
-    "use_llm_ranker": False,      # 开启需要 ANTHROPIC_API_KEY
+    "use_llm_ranker": False,      # 可选，默认关闭
     "ranker_model": "claude-haiku-4-5-20251001",
     "use_field_aware_slot_coverage": True,
 })
@@ -198,13 +193,9 @@ agent = Agent("data/catalog.jsonl", {
 
 ## 离线模式（决赛禁网）
 
-当 `ANTHROPIC_API_KEY` 未设置或网络不可用时：
-- LLM 重排自动回退到检索分顺序（无需修改代码）
-- BM25 与全部对话策略均在本地运行
-- Dense 推理与向量索引均在本地；模型/索引不可用时自动回退 BM25
-- 默认风险门控采用惰性加载，强 BM25 查询不会触发 Dense 模型加载
+默认方案（BM25-only）完全离线，无网络依赖，无需下载模型。以字段感知的确认约束覆盖、画像先验和风险感知 MMR 对 top-20 候选重排。
 
-默认离线重排不需要下载模型：以字段感知的确认约束覆盖、画像先验和风险感知 MMR 对 top-20 候选重排。
+启用 Dense 时：模型/索引不可用则自动回退 BM25；默认风险门控采用惰性加载，强 BM25 场景不触发 Dense 模型加载。
 
 ---
 

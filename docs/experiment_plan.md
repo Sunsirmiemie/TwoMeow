@@ -1,6 +1,8 @@
 # 实验计划与结果记录
 
-> 历史记录说明：以下“已完成实验”保留用于追溯熵、早停与 Override 的系统改进，不代表当前 rerank。当前方案为保留画像先验的字段感知精确约束覆盖与风险感知 MMR 重排，结果见 `results_rerank_risk_aware_mmr_profile.json`（TechnicalScore 0.813731）。
+> 历史记录说明：以下”已完成实验”保留用于追溯熵、早停与 Override 的系统改进。
+> **当前版本（三项优化后，2026-08-30）**公开集结果：HitRate@10=0.955、MRR=0.706129、MTTC=2.865、TechnicalScore=**0.852039**（`docs/THREE_OPTIMIZATIONS_20260829.md`）。
+> **泛化警告**：与公开集零重叠的 400-ASIN 盲测（seed 20260830）TechnicalScore=0.750553，低于原版 BM25 的 0.760657；当前三项优化仍应视为实验方案。
 
 ## 已完成实验（消融分析）
 
@@ -21,6 +23,16 @@
 | + Early Stop (τ=0.3) | 0.888 | 0.900 | 0.833 | 0.900 | 0.885 | 0.536 | 3.44 | 0.755 |
 | + Override Detection | 0.888 | 0.900 | 0.867 | 0.900 | 0.890 | 0.555 | 3.40 | **0.763** |
 | Final (无 Early Stop) | 0.738 | 0.838 | 0.767 | 0.900 | 0.790 | 0.473 | 5.12 | 0.655 |
+
+**第二轮消融（三项优化，2026-08-30；详见 `docs/THREE_OPTIMIZATIONS_20260829.md`）**
+
+| 配置 | Overall HR | MRR | MTTC | TechScore |
+|------|------------|-----|------|-----------|
+| 更新仓库原始复测（Rerank + MMR 基线） | 0.905 | 0.706437 | 3.535 | 0.813731 |
+| + 否定感知回复提纯 | 0.880 | 0.664893 | 3.660 | 0.786268 |
+| + 动态属性权重（严格 Override，历史实验） | 0.935 | 0.688629 | 2.995 | 0.834189 |
+| 最终：选择性 Override + Dense 风险门控 | **0.955** | 0.706129 | **2.865** | **0.852039** |
+| 最终：选择性 Override + 强制字段 Dense | 0.920 | 0.546383 | 3.165 | 0.780615 |
 
 ### 关键结论
 
@@ -51,18 +63,11 @@ Early Stop 阈值目前固定 τ=0.3（来自 PDF 理论推导）。
 
 运行方式：修改 `src/dialogue/early_stop.py` 中 `TAU`，执行 `scripts/run_public_eval.py`。
 
-#### E2: LLM 重排器开启（联网环境）
-> 非当前方案。当前 rerank 不依赖 LLM，且公开集结果使用零 token 本地重排获得。
-当前 `use_llm_ranker=False`。开启后对 MRR 影响最大（31 个 session 的目标商品位于 rank 6-10）。
-
-```bash
-ANTHROPIC_API_KEY=... python scripts/run_public_eval.py --llm-rank
-```
-
-推荐模型：`claude-sonnet-4-6`（比 Haiku 语义理解更强，适合 listwise 排序）
+#### E2: LLM 重排器（暂不采用）
+> 当前方案不使用 LLM 重排。默认 `use_llm_ranker=False`，公开集 200 条结果为零 token、纯本地运行（TechScore=0.852164）。LLM 路径保留为兼容可选分支，但 prompt 信息量不足（仅 title），预期收益有限，暂不评测。
 
 #### E3: slot_filter 扩展
-当前 `_apply_slot_filters` 仅过滤 budget。添加 material/color 硬过滤可提升 Buying 场景 HitRate。
+> **部分完成**：动态属性权重已在 top-300→100 阶段对 material/color 等属性施加兼容度重排（`src/ranking/dynamic_attributes.py`）；BM25 `_apply_slot_filters()` 仍仅硬过滤 budget。进一步添加 material/color 硬过滤可进一步提升 Buying 场景 HitRate。
 
 文件：`src/retrieval/bm25.py:_apply_slot_filters()`
 
@@ -80,8 +85,7 @@ ANTHROPIC_API_KEY=... python scripts/run_public_eval.py --llm-rank
 Buying 场景 HR=0.888，仍有 ~11% miss。部分原因是 material/color slot 未做硬过滤。
 
 #### E7: 查询改写
-当前查询 = `slot_text×2 + message + history`，未对 intent override 后做重置。
-Override 后可重新构建不含旧槽的 clean query。
+> **已完成**：Override 后选择性覆盖已通过 `src/dialogue/purification.py` + `override_carryover_confidence=0.35` 实现；旧槽降为低置信度弱证据，旧原句不会重新拼回查询。
 
 ---
 

@@ -74,6 +74,37 @@ query = f"{slot_text} {slot_text} {user_message} {filtered_history}"
 
 重复一次使 BM25 TF 得分翻倍，相当于对确认约束施加 2× 权重，无需修改 FTS5 实现。同时对历史消息做噪声过滤（跳过 "use your judgment" / "not quite right" 等评估器填充语句）。
 
+## 创新点六：否定感知的回复提纯
+
+**问题**：用户回答"not red; blue instead"时，若把 `red` 和 `blue` 一起送进检索，`red` 成为正向 BM25 词项，反而把不想要的商品召回。
+
+**创新**：`src/dialogue/purification.py` 把每轮回答拆成三类证据：正向约束、排除约束、无偏好。检索文本只保留正向部分；排除约束写入 `negative_slots`，后续商品评分对匹配项施加排除惩罚。Intent Override 时采用选择性覆盖：冲突属性直接替换，其余旧属性降为 0.35 置信度弱证据，旧原句不重新拼回查询。
+
+## 创新点七：候选池感知的动态商品属性权重
+
+**问题**：固定字段权重（title/features/...）在累计证据变化时无法自适应；50,000→100 和 top-20→10 两个截断阶段权重各自静止。
+
+**创新**：每轮对每个已确认属性 `a` 计算动态权重：
+
+```
+raw_weight(a) = evidence_confidence × recency × (0.55 + 0.45 × pool_selectivity) × attribute_prior
+```
+
+- `pool_selectivity`：候选池中满足该属性值的商品比例越低，该属性越能区分商品，权重越高；
+- 归一化后作用于两个阶段：BM25 字段权重（50,000→100）和 MMR 相关性分（top-20→10）。
+
+**效果**：在动态属性单项上，历史实验 TechScore 从 0.814 升至 0.834，MTTC 从 3.54 降至 3.00。
+
+## 创新点八：字段分离 Dense + 风险门控自适应融合
+
+**问题**：把 title+categories+features 拼接后统一编码，导致同一向量同时承载"商品是什么"和"商品有什么特性"，混合语义削弱了检索精度。公开集上强制 Dense（原版）TechScore 0.743，反而低于 BM25-only 的 0.814。
+
+**创新**：
+- **字段分离**：身份向量（title+categories+store）与属性向量（features+details+description）分别编码和查询；已知具体属性越多，属性相似度权重越高。
+- **风险门控**：Buying 场景始终跳过 Dense；BM25 候选充足（≥20 且有稳定类别）时不调用 Dense；仅词法召回薄弱时才惰性加载 Dense。Dense 不可用时自动回退 BM25。
+
+**效果**：公开集默认路径（风险门控）TechScore=0.852039，优于强制字段 Dense 的 0.780615。
+
 ---
 
 ## 技术创新与业务价值的结合

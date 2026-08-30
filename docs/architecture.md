@@ -94,13 +94,19 @@ Buying 专属：追加 `price ≤ budget` 硬过滤。
 
 **Dense 检索**（sentence-transformers all-MiniLM-L6-v2）
 
-编码策略：`title. categories. features[:300]`（features 包含评估器意图卡的关键词）
+字段分离编码策略（字段感知 Dense）：
+- 身份向量：`title + categories + store`
+- 属性向量：`features + details + description`
+
+查询同样分成类别/身份查询与属性查询，两个相似度分数在运行时加权融合，不拼接向量。已知具体属性越多，属性相似度权重越高；类别明确时身份相似度权重更高。
 
 50K 商品首次编码后缓存 `.embed_cache/*.npz`，后续直接加载。
 
+**风险门控**：BM25 候选充足（≥20 且有稳定类别）时跳过 Dense；Buying 轨道始终跳过 Dense。Dense 不可用时自动回退 BM25。
+
 cosine similarity via dot product（L2 归一化后等价）+ partial sort O(n log k)。
 
-**RRF 融合**（仅 Browsing 轨道）
+**RRF 融合**（仅 Browsing 轨道，Dense 门控通过后）
 
 | 已确认槽数 | BM25 权重 | Dense 权重 | 逻辑 |
 |-----------|-----------|-----------|------|
@@ -173,4 +179,8 @@ else:
 | + Early Stop | 0.888 | 0.900 | 0.833 | 0.900 | 0.885 | 0.536 | 3.44 | 0.755 |
 | + Override | 0.888 | 0.900 | 0.867 | 0.900 | 0.890 | 0.555 | 3.40 | **0.763** |
 
-上表用于说明历史对话策略增益。当前 rerank 为保留画像先验的字段感知精确约束覆盖与风险感知 MMR：HitRate@10=0.905、MRR=0.706437、TechnicalScore=0.813731，结果见 `results_rerank_risk_aware_mmr_profile.json`。
+上表用于说明历史对话策略增益（截至 rerank 阶段前）。
+
+**当前版本（三项优化后，2026-08-30）公开集结果**：HitRate@10=0.955、MRR=0.706129、MTTC=2.865、TechnicalScore=**0.852039**。详见 `docs/THREE_OPTIMIZATIONS_20260829.md`。
+
+**泛化警告**：第二组与公开集零重叠的 400-ASIN 盲测（seed 20260830）中，TechnicalScore=0.750553，低于原版 BM25 的 0.760657。公开集提升不能视为已证明的泛化提升，当前三项优化仍应视为实验方案。
