@@ -26,4 +26,4 @@ The current MiniLM configuration with the Dense risk gate scores `0.767773` on d
 3. Until fusion preserves `bm25_raw_score` and exposes semantic similarity as a separate bounded feature, changing the encoder would optimize a secondary effect.
 4. Keeping MiniLM minimizes submission size and latency while preserving the existing offline fallback behavior.
 
-No model weights, Hugging Face cache files, generated embedding indexes, or local evaluation outputs are committed to the repository.
+This branch adds no model weights, Hugging Face cache files, MPNet/E5 indexes, or local evaluation outputs. The MiniLM `.npz` cache already tracked by the repository baseline is left unchanged.
