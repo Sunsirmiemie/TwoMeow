@@ -22,7 +22,10 @@ class Clarifier:
         attr_cache: dict[str, dict] | None = None,
     ) -> str | None:
         asked = set(session.asked_attributes)
-        known = set(session.slots.keys())
+        known = {
+            key for key in session.slots
+            if session.slot_confidence.get(key, 1.0) >= 0.5
+        }
         eligible = [a for a in SCOREABLE_ATTRS if a not in asked and a not in known]
 
         if not eligible:

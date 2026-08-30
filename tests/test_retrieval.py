@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.ranking.scorer import fuse, rrf_score
+from src.ranking.scorer import adaptive_fusion_weights, fuse, rrf_score
 from src.retrieval.bm25 import BM25Retriever
 from src.retrieval.hybrid import HybridRetriever
 
@@ -172,6 +172,103 @@ def test_hybrid_retriever_uses_base_weights_after_browsing_weight_stages():
         )
 
     assert results[0]["parent_asin"] == "DENSE"
+
+
+def test_dynamic_bm25_weights_follow_accumulated_attribute_evidence():
+    products = [
+        {"parent_asin": "A1", "title": "shoe", "features": ["waterproof"]},
+        {"parent_asin": "A2", "title": "shoe", "features": ["lightweight"]},
+    ]
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        catalog_path = Path(tmp_dir) / "catalog.jsonl"
+        catalog_path.write_text(
+            "".join(json.dumps(product) + "\n" for product in products),
+            encoding="utf-8",
+        )
+        retriever = BM25Retriever(
+            str(catalog_path), use_dynamic_attribute_scoring=True,
+        )
+        from src.agent.state import SessionMemory
+        session = SessionMemory({})
+        session.slots = {"category": "shoe", "feature": "waterproof"}
+        session.slot_confidence = {"category": 1.0, "feature": 1.0}
+        retriever.search("shoe waterproof", session.slots, "buying", session=session)
+
+    assert retriever.last_field_weights["categories"] > retriever.field_weights["categories"]
+    assert retriever.last_field_weights["features"] > retriever.field_weights["features"]
+
+
+def test_adaptive_fusion_uses_current_score_confidence():
+    from src.agent.state import SessionMemory
+    session = SessionMemory({})
+    bm25 = [{"score": 1.0}, {"score": 0.1}]
+    dense = [{"score": 0.5}, {"score": 0.49}]
+
+    bm25_weight, dense_weight = adaptive_fusion_weights(
+        bm25, dense, session, (0.5, 0.5),
+    )
+
+    assert bm25_weight > dense_weight
+    assert round(bm25_weight + dense_weight, 8) == 1.0
+
+
+def test_dense_risk_gate_preserves_strong_category_bm25_results():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        catalog_path = Path(tmp_dir) / "catalog.jsonl"
+        catalog_path.write_text(
+            json.dumps({"parent_asin": "BM25", "title": "red shoe"}) + "\n",
+            encoding="utf-8",
+        )
+        retriever = HybridRetriever(
+            str(catalog_path),
+            {
+                "use_dense": False,
+                "use_dense_risk_gate": True,
+                "dense_gate_min_bm25": 1,
+            },
+        )
+
+        class FakeDense:
+            field_aware = False
+
+            def search(self, _query, top_k):
+                raise AssertionError("risk-gated Dense should not run")
+
+        retriever.dense = FakeDense()
+        results = retriever.retrieve(
+            "red shoe", {"category": "shoe"}, "browsing", top_k=1,
+        )
+
+    assert results[0]["parent_asin"] == "BM25"
+
+
+def test_dense_risk_gate_fills_a_short_lexical_result_list():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        catalog_path = Path(tmp_dir) / "catalog.jsonl"
+        catalog_path.write_text(
+            json.dumps({"parent_asin": "BM25", "title": "red shoe"}) + "\n",
+            encoding="utf-8",
+        )
+        retriever = HybridRetriever(
+            str(catalog_path),
+            {
+                "use_dense": False,
+                "use_dense_risk_gate": True,
+                "dense_gate_min_bm25": 2,
+                "browsing_weights": [[0.5, 0.5], [0.6, 0.4]],
+            },
+        )
+
+        class FakeDense:
+            field_aware = False
+
+            def search(self, _query, top_k):
+                return [{"parent_asin": "DENSE", "score": 1.0}][:top_k]
+
+        retriever.dense = FakeDense()
+        results = retriever.retrieve("red shoe", {}, "browsing", top_k=2)
+
+    assert {item["parent_asin"] for item in results} == {"BM25", "DENSE"}
 
 
 if __name__ == "__main__":

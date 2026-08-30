@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Pre-build the dense embedding index and save to .embed_cache/.
+Pre-build the field-aware dense embedding index and save it to the cache.
 Run this once before eval to avoid embedding delay during evaluation.
 Usage: python scripts/build_index.py [--catalog data/catalog.jsonl] [--model all-MiniLM-L6-v2]
 """
@@ -20,8 +20,8 @@ def main() -> None:
     args = parser.parse_args()
 
     print(f"Building dense index for {args.catalog} using {args.model}...")
-    DenseRetriever(args.catalog, args.model)
-    print("Done. Cache saved to .embed_cache/")
+    DenseRetriever(args.catalog, args.model, use_field_aware=True)
+    print("Done. Set TWOMEOW_DENSE_CACHE_DIR to control the cache location.")
 
 
 if __name__ == "__main__":

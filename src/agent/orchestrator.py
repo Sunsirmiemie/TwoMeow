@@ -37,12 +37,20 @@ class Agent:
             title_lookup=self.retriever.bm25._titles,
             categories=self.retriever.bm25._categories,
             meta=self.retriever.bm25._meta,
+            attr_cache=self.retriever.bm25._attr_cache,
         )
         self.clarifier = Clarifier(self.config.get("min_pool_for_dynamic", 10))
         self._sessions: dict[str, SessionMemory] = {}
 
     def reset(self, session_id: str, user_profile: dict) -> None:
-        self._sessions[session_id] = SessionMemory(user_profile)
+        session = SessionMemory(user_profile)
+        session.use_reply_purification = self.config.get(
+            "use_reply_purification", True
+        )
+        session.override_carryover_confidence = float(
+            self.config.get("override_carryover_confidence", 0.35)
+        )
+        self._sessions[session_id] = session
 
     def respond(self, session_id: str, user_message: str, turn: int, top_k: int) -> dict:
         session = self._sessions.get(session_id, SessionMemory({}))
@@ -56,7 +64,10 @@ class Agent:
                 session.scenario_type = "buying" if _BUYING_RE.search(user_message) else "browsing"
 
         # 2. Extract slots
-        new_info = SlotTracker(session).extract_and_update(user_message)
+        new_info = SlotTracker(
+            session,
+            use_purification=self.config.get("use_reply_purification", True),
+        ).extract_and_update(user_message)
         session.last_reply_new_info = new_info
         session.no_info_streak = 0 if new_info else session.no_info_streak + 1
 
@@ -69,6 +80,7 @@ class Agent:
             track,
             top_k=self.retrieval_top_k,
             turn=turn,
+            session=session,
         )
 
         # 4. Attribute selection (dynamic entropy or global-entropy fallback)
@@ -89,7 +101,7 @@ class Agent:
         ranked      = self.ranker.rerank(rerank_pool, session, top_k=top_k)
 
         # 6. Record turn
-        session.add_turn(user_message, ranked)
+        session.add_turn(user_message, ranked, session.last_query_text)
 
         return {
             "message": build_message(ask_attribute, ranked),
@@ -111,7 +123,10 @@ class Agent:
         """
         if self.config.get("use_early_stop", True):
             asked     = set(session.asked_attributes)
-            known     = set(session.slots.keys())
+            known = {
+                key for key in session.slots
+                if session.slot_confidence.get(key, 1.0) >= 0.5
+            }
             remaining = [a for a in SCOREABLE_ATTRS if a not in asked and a not in known]
             if should_stop(
                 candidates,
