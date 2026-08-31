@@ -1,114 +1,114 @@
-# 创新点说明
+# Innovation Description
 
-本文档对应比赛评审维度"Innovation & Problem Insight"（20%权重），阐述 TwoMeow 在技术方案上的核心创新与对问题的深度理解。
+This document corresponds to the competition judging dimension "Innovation & Problem Insight" (20% weight), explaining TwoMeow's core technical innovations and deep understanding of the problem.
 
-## 创新点一：熵驱动的动态澄清策略
+## Innovation 1: Entropy-Driven Dynamic Clarification Strategy
 
-**问题**：静态属性优先顺序（固定问 material → color → size → ...）忽视了不同商品池在不同维度上的信息分布差异。比如在一批全是棉质连衣裙的候选池里，问 material 得不到任何新信息。
+**Problem**: Static attribute priority ordering (fixed order: material → color → size → ...) ignores how information is distributed differently across dimensions in different product pools. For example, in a candidate pool of all-cotton dresses, asking about material yields no new information.
 
-**创新**：在每轮对话时，基于当前候选池实时计算每个属性的信息增益：
+**Innovation**: Each dialogue turn, computes the information gain of each attribute in real-time based on the current candidate pool:
 
 ```
 score(attr) = coverage(attr) × normalized_entropy(attr)
 ```
 
-- `coverage`：候选池中该属性有值的商品占比（衡量该问题的"可回答性"）
-- `entropy`：该属性值分布的归一化信息熵（衡量回答的"信息量"）
+- `coverage`: proportion of candidate pool products that have a value for this attribute (measures "answerability" of the question)
+- `entropy`: normalized information entropy of the attribute value distribution (measures "information content" of the answer)
 
-当候选池较小（<10件）时，与 PDF 分析的 50,000 件全局熵加权混合，避免小样本噪声。
+When the candidate pool is small (<10), blended with global entropy from PDF analysis of 50,000 products, avoiding small-sample noise.
 
-**效果**：TechScore +0.066（BM25-only 0.590 → + Entropy 0.656），MTTC 从 6.36 降至 5.08。
+**Effect**: TechScore +0.066 (BM25-only 0.590 → + Entropy 0.656), MTTC reduced from 6.36 to 5.08.
 
-## 创新点二：熵阈值早停（Early Stop，τ=0.3）
+## Innovation 2: Entropy-Threshold Early Stop (τ=0.3)
 
-**问题**：当候选池已经高度聚焦（各属性的信息熵都很低），继续询问具体属性只会得到"I don't have an additional preference"——白白浪费轮次，推高 MTTC。
+**Problem**: When the candidate pool is already highly focused (all attribute entropies are low), continuing to ask specific attributes only yields "I don't have an additional preference" — wasting turns and inflating MTTC.
 
-**创新**：引入熵阈值早停机制：
+**Innovation**: Introduces an entropy-threshold early stop mechanism:
 
 ```
 if max(score(attr) for attr in remaining) < τ=0.3:
-    ask "other"  # 通配问题：让评估器选择任意尚未披露的约束
+    ask "other"  # wildcard question: let the evaluator choose any undisclosed constraint
 ```
 
-当所有剩余属性的信息增益均低于阈值时，与其猜问哪个属性，不如用通配符让评估器主动选择最相关的约束来回答。这将"无效问题"转换为"有效信息获取"。
+When the information gain of all remaining attributes is below the threshold, instead of guessing which attribute to ask, use a wildcard to let the evaluator proactively choose the most relevant constraint to answer. This converts "wasted questions" into "effective information acquisition."
 
-**效果**：TechScore +0.099（最大单步提升），MTTC 从 5.08 降至 3.44，HitRate 从 0.800 升至 0.885。这是与纯理论预测（PDF 认为τ=0.3最优）一致的实验验证。
+**Effect**: TechScore +0.099 (largest single-step gain), MTTC reduced from 5.08 to 3.44, HitRate increased from 0.800 to 0.885. This is experimental validation consistent with the theoretical prediction (PDF identified τ=0.3 as optimal).
 
-## 创新点三：四场景感知的自适应检索路由
+## Innovation 3: Four-Scenario-Aware Adaptive Retrieval Routing
 
-**问题**：Buying 和 Browsing 场景的检索需求本质不同——Buying 用户有精确硬约束，需要关键词精准匹配；Browsing 用户意图模糊，需要语义召回兜底。
+**Problem**: Buying and Browsing scenarios have fundamentally different retrieval needs — Buying users have precise hard constraints requiring keyword exact matching; Browsing users have vague intent requiring semantic recall as fallback.
 
-**创新**：根据场景和当前槽数动态调整检索策略：
+**Innovation**: Dynamically adjusts retrieval strategy based on scenario and current slot count:
 
-| 场景/槽状态 | BM25 | Dense | 理由 |
+| Scenario/slot state | BM25 | Dense | Rationale |
 |------------|------|-------|------|
-| Buying | 100% | 0% | 每轮评估器给出精确约束文本，BM25 直接命中 |
-| Browsing，0槽 | 50% | 50% | 无约束，语义泛化兜底 |
-| Browsing，1槽 | 60% | 40% | 约束少，仍需语义补充 |
-| Browsing，≥2槽 | 75% | 25% | 约束足，精确匹配优先 |
+| Buying | 100% | 0% | Evaluator provides precise constraint text each turn, BM25 hits directly |
+| Browsing, 0 slots | 50% | 50% | No constraints, semantic generalization as fallback |
+| Browsing, 1 slot | 60% | 40% | Few constraints, still need semantic supplement |
+| Browsing, ≥2 slots | 75% | 25% | Enough constraints, exact match preferred |
 
-消融实验发现：Dense 在 Buying 场景下加入 RRF 后 MRR 反而下降（0.464→0.427），因此 Buying 轨道完全跳过 Dense，这是从数据中发现的非直觉结论。
+Ablation experiments found: adding Dense into RRF for Buying actually reduces MRR (0.464→0.427), so the Buying track completely skips Dense — a counterintuitive finding discovered from data.
 
-## 创新点四：意图突变的原子级状态重置
+## Innovation 4: Atomic State Reset on Intent Override
 
-**问题**：Intent Override 场景（占 15%）中用户在第 3/4 轮突然说"忽略之前的偏好"。若旧槽未清空，旧约束会污染新查询，导致检索结果完全错误。
+**Problem**: In the Intent Override scenario (15% of sessions), users suddenly say "ignore my earlier preference" at turn 3/4. If old slots are not cleared, old constraints pollute the new query, resulting in completely wrong retrieval results.
 
-**创新**：用正则精确匹配评估器的固定模板 `"ignore my earlier preference"`，原子级操作：
-1. 清空所有已确认槽（`slots.clear()`）
-2. 清空已问属性列表（`asked_attributes.clear()`）
-3. 重置为 buying 轨道（新约束通常是硬约束）
+**Innovation**: Uses regex to precisely match the evaluator's fixed template `"ignore my earlier preference"`, atomically:
+1. Clear all confirmed slots (`slots.clear()`)
+2. Clear the asked-attributes list (`asked_attributes.clear()`)
+3. Reset to buying track (new constraints are typically hard constraints)
 
-关键设计：SlotTracker 在 IntentRouter 之后运行，能立刻把 `"What I need is: X"` 解析为新槽，而不会受旧槽干扰。
+Key design: SlotTracker runs after IntentRouter, so it can immediately parse `"What I need is: X"` as a new slot without interference from old slots.
 
-**效果**：Override 场景 HR 0.833→0.867，MRR 0.601→0.722。
+**Effect**: Override scenario HR 0.833→0.867, MRR 0.601→0.722.
 
-## 创新点五：查询双重加权构建
+## Innovation 5: Double-Weighted Query Construction
 
-**问题**：BM25 对所有词项平等对待，而"已确认的槽值"（如用户明确说过的 "leather"）比历史消息中的噪声词具有更高的检索优先级。
+**Problem**: BM25 treats all terms equally, while "confirmed slot values" (e.g., "leather" explicitly stated by the user) have higher retrieval priority than noise words in history messages.
 
-**创新**：查询构建时主动重复槽值文本：
+**Innovation**: Actively repeats slot value text when constructing queries:
 
 ```python
 query = f"{slot_text} {slot_text} {user_message} {filtered_history}"
 ```
 
-重复一次使 BM25 TF 得分翻倍，相当于对确认约束施加 2× 权重，无需修改 FTS5 实现。同时对历史消息做噪声过滤（跳过 "use your judgment" / "not quite right" 等评估器填充语句）。
+Repeating once doubles BM25 TF score, equivalent to applying 2× weight on confirmed constraints, without modifying the FTS5 implementation. History messages are also noise-filtered (skipping evaluator fill phrases like "use your judgment" / "not quite right").
 
-## 创新点六：否定感知的回复提纯
+## Innovation 6: Negation-Aware Response Purification
 
-**问题**：用户回答"not red; blue instead"时，若把 `red` 和 `blue` 一起送进检索，`red` 成为正向 BM25 词项，反而把不想要的商品召回。
+**Problem**: When a user answers "not red; blue instead", sending both `red` and `blue` into retrieval makes `red` a positive BM25 term, recalling products the user doesn't want.
 
-**创新**：`src/dialogue/purification.py` 把每轮回答拆成三类证据：正向约束、排除约束、无偏好。检索文本只保留正向部分；排除约束写入 `negative_slots`，后续商品评分对匹配项施加排除惩罚。Intent Override 时采用选择性覆盖：冲突属性直接替换，其余旧属性降为 0.35 置信度弱证据，旧原句不重新拼回查询。
+**Innovation**: `src/dialogue/purification.py` splits each turn's answer into three evidence categories: positive constraints, exclusion constraints, and no-preference. Only the positive part is kept in retrieval text; exclusion constraints are recorded in `negative_slots`, and downstream product scoring applies an exclusion penalty to matching items. On Intent Override, selective overwrite is used: conflicting attributes are replaced directly, other old attributes are demoted to 0.35 confidence weak evidence, and old raw text is not re-added to queries.
 
-## 创新点七：候选池感知的动态商品属性权重
+## Innovation 7: Candidate-Pool-Aware Dynamic Product Attribute Weights
 
-**问题**：固定字段权重（title/features/...）在累计证据变化时无法自适应；50,000→100 和 top-20→10 两个截断阶段权重各自静止。
+**Problem**: Fixed field weights (title/features/...) cannot self-adapt as accumulated evidence changes; the two truncation stages 50,000→100 and top-20→10 each have static weights.
 
-**创新**：每轮对每个已确认属性 `a` 计算动态权重：
+**Innovation**: Each turn computes a dynamic weight for each confirmed attribute `a`:
 
 ```
 raw_weight(a) = evidence_confidence × recency × (0.55 + 0.45 × pool_selectivity) × attribute_prior
 ```
 
-- `pool_selectivity`：候选池中满足该属性值的商品比例越低，该属性越能区分商品，权重越高；
-- 归一化后作用于两个阶段：BM25 字段权重（50,000→100）和 MMR 相关性分（top-20→10）。
+- `pool_selectivity`: the lower the proportion of candidate pool products satisfying this attribute value, the more discriminating the attribute and the higher its weight;
+- Normalized and applied in both stages: BM25 field weights (50,000→100) and MMR relevance score (top-20→10).
 
-**效果**：在动态属性单项上，历史实验 TechScore 从 0.814 升至 0.834，MTTC 从 3.54 降至 3.00。
+**Effect**: In dynamic attribute single-item experiments, historical TechScore improved from 0.814 to 0.834, MTTC reduced from 3.54 to 3.00.
 
-## 创新点八：字段分离 Dense + 风险门控自适应融合
+## Innovation 8: Field-Separated Dense + Risk-Gated Adaptive Fusion
 
-**问题**：把 title+categories+features 拼接后统一编码，导致同一向量同时承载"商品是什么"和"商品有什么特性"，混合语义削弱了检索精度。公开集上强制 Dense（原版）TechScore 0.743，反而低于 BM25-only 的 0.814。
+**Problem**: Concatenating title+categories+features and encoding them into one vector makes the same vector carry both "what the product is" and "what properties the product has," mixing semantics and weakening retrieval precision. On the public set, forced Dense (original) TechScore 0.743, actually lower than BM25-only's 0.814.
 
-**创新**：
-- **字段分离**：身份向量（title+categories+store）与属性向量（features+details+description）分别编码和查询；已知具体属性越多，属性相似度权重越高。
-- **风险门控**：Buying 场景始终跳过 Dense；BM25 候选充足（≥20 且有稳定类别）时不调用 Dense；仅词法召回薄弱时才惰性加载 Dense。Dense 不可用时自动回退 BM25。
+**Innovation**:
+- **Field separation**: Identity vector (title+categories+store) and attribute vector (features+details+description) are encoded and queried separately; the more specific attributes are known, the higher the attribute similarity weight.
+- **Risk gate**: Buying scenario always skips Dense; when BM25 candidates are sufficient (≥20 with stable category), Dense is not called; only lazily loads Dense when lexical recall is weak. Automatically falls back to BM25 when Dense is unavailable.
 
-**效果**：公开集默认路径（风险门控）TechScore=0.852039，优于强制字段 Dense 的 0.780615。
+**Effect**: Default path (risk gate) on public set TechScore=0.852039, better than forced field Dense's 0.780615.
 
 ---
 
-## 技术创新与业务价值的结合
+## Combining Technical Innovation with Business Value
 
-上述创新点共同构成了一个"边对话边收敛"的自适应策略：系统不是机械地走完所有问题，而是实时评估"还需要知道什么"——在信息充足时果断推荐，在信息不足时精准提问。
+The above innovations together form an adaptive strategy that "converges while conversing": the system does not mechanically go through all questions, but rather evaluates in real-time "what else needs to be known" — confidently recommending when information is sufficient, and precisely asking when information is lacking.
 
-这与真实电商场景高度吻合：好的导购员不是按固定脚本问问题，而是根据顾客的回答判断候选品已经收窄到什么程度，从而决定继续问还是直接推荐。
+This closely mirrors real e-commerce scenarios: a good sales assistant doesn't follow a fixed question script, but rather judges from customer responses how much the candidate set has narrowed, deciding whether to keep asking or to recommend directly.

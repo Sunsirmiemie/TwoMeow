@@ -1,42 +1,42 @@
-# 重排更新记录：画像先验 + 字段感知 + 风险约束 MMR
+# Reranker Update: Profile Prior + Field-Aware + Risk-Constrained MMR
 
-## 目标
+## Objective
 
-在不使用大模型、不改动检索与官方评测器的前提下，对检索阶段给出的候选商品做本地重排，输出最终前 10 个商品。目标是在保持相关性信号的基础上，减少前 10 名中高度相似商品的重复占位。
+Perform local reranking of candidate products from the retrieval stage, outputting the final top-10 products, without using large models, without modifying retrieval, and without modifying the official evaluator. The goal is to reduce redundant near-duplicate products occupying the top-10 while preserving relevance signals.
 
-## 当前方案
+## Current Approach
 
-重排位于 `src/ranking/reranker.py`，只处理已有候选，不会过滤或新增商品。流程如下：
+Reranking is in `src/ranking/reranker.py`, processes only existing candidates without filtering or adding new products. The flow is:
 
-1. **画像先验**：从会话中的 `preference_tags` 提取偏好词，并与商品标题、类目和画像文本的词集合计算重叠；该分数只作为有上界的小幅加分，不会排除任何候选。
-2. **字段感知约束覆盖**：把已确认的槽位词与商品的标题、类目、features、details 文本比对。用户明确表达的颜色、材质、品类等词只要出现在任一字段，就会得到覆盖分，避免只看标题而漏掉有效商品。
-3. **相关性特征融合**：以原始 BM25/RRF 分数为主，同时融合槽位覆盖、类目命中、评分数流行度和预算价格邻近度。各权重统一在 `src/config/default.yaml` 的 `ranking.feature_weights` 中配置。
-4. **风险约束 MMR 选前 10**：先按上述相关性计算每个候选的分数，再逐个选择“相关性高、且与已选商品不重复”的商品。商品间相似度使用 token-set Jaccard；有效 `mmr_lambda` 上限为 0.70，避免相近商品占满前 10 个位置。
+1. **Profile prior**: Extracts preference words from the session's `preference_tags`, computes overlap with product title, category, and profile text token sets; this score is only a bounded small bonus, does not exclude any candidate.
+2. **Field-aware constraint coverage**: Matches confirmed slot words against product title, category, features, and details text. Explicitly expressed colors, materials, categories etc. get coverage scores whenever they appear in any field, avoiding missing valid products by only checking the title.
+3. **Relevance feature fusion**: Uses raw BM25/RRF score as primary, also fusing slot coverage, category hit, rating-count popularity, and budget price proximity. All weights configured uniformly in `src/config/default.yaml` under `ranking.feature_weights`.
+4. **Risk-constrained MMR for top-10 selection**: First computes each candidate's score based on the above relevance, then iteratively selects products that are "highly relevant and not redundant with already-selected products." Inter-product similarity uses token-set Jaccard; effective `mmr_lambda` is capped at 0.70 to prevent near-duplicate products from filling all top-10 positions.
 
-整个路径为本地规则和词项计算：不调用网络、不训练模型、token 使用量为 0。LLM 重排接口仍兼容保留，但本次公开集实验不使用它。
+The entire path is local rules and term computation: no network calls, no model training, zero token usage. LLM reranking interface is retained for compatibility but was not used in this public set experiment.
 
-## 灵感来源论文
+## Inspiration Paper
 
-本方案的核心灵感来自 Puthiya Parambath、Vijayakumar 与 Chawla 的论文：
+The core inspiration for this approach comes from Puthiya Parambath, Vijayakumar, and Chawla:
 
 > **Risk Aware Ranking for Top-k Recommendations** (2019)
 > https://arxiv.org/abs/1904.05325
 
-论文讨论了 Top-k 推荐不能只优化单个商品的预测分数：最终列表还应控制不确定性和重复风险。这里没有复现论文中的学习式风险模型，而是采用可审计的本地近似：保留相关性主导的特征分，并用 MMR 对已选商品的相似度施加惩罚。这样前 10 个结果既保留命中目标的机会，也避免同类近重复商品挤占列表。
+The paper discusses how Top-k recommendations should not only optimize individual product prediction scores: the final list should also control uncertainty and redundancy risk. Rather than replicating the paper's learned risk model, this uses an auditable local approximation: preserving relevance-dominant feature scores and applying MMR penalty on similarity to already-selected products. This ensures the top-10 results retain opportunity to hit the target while preventing near-duplicate products from crowding the list.
 
-## 配置与复现
+## Configuration and Reproduction
 
-关键参数位于 `src/config/default.yaml`：
+Key parameters in `src/config/default.yaml`:
 
-| 参数 | 当前值 | 作用 |
+| Parameter | Current value | Purpose |
 | --- | ---: | --- |
-| `rerank_top_n` | 20 | 对检索得到的前 20 个候选进行重排 |
-| `mmr_lambda` | 1.0（有效上限 0.70） | 控制相关性与去重的平衡 |
-| `profile_weight` | 0.15 | 画像先验的有界加分 |
-| `use_field_aware_slot_coverage` | true | 启用标题/类目/属性/详情字段覆盖 |
-| `feature_weights` | 见配置 | 各相关性特征的融合权重 |
+| `rerank_top_n` | 20 | Rerank top-20 candidates from retrieval |
+| `mmr_lambda` | 1.0 (effective cap 0.70) | Controls relevance vs. deduplication balance |
+| `profile_weight` | 0.15 | Bounded bonus for profile prior |
+| `use_field_aware_slot_coverage` | true | Enable title/category/feature/details field coverage |
+| `feature_weights` | see config | Fusion weights for each relevance feature |
 
-在项目根目录运行：
+Run from project root:
 
 ```bash
 $env:PYTHONHASHSEED='0'
@@ -45,11 +45,11 @@ $env:MKL_NUM_THREADS='1'
 python scripts/run_public_eval.py --output results_rerank_risk_aware_mmr_profile.json
 ```
 
-## 公开集结果
+## Public Set Results
 
-使用官方公开集 200 条与官方 evaluator 运行，结果写入 `results_rerank_risk_aware_mmr_profile.json`：
+Run against 200 official public sessions with official evaluator, results written to `results_rerank_risk_aware_mmr_profile.json`:
 
-| 指标 | 当前重排结果 |
+| Metric | Current reranking result |
 | --- | ---: |
 | Hit Rate@10 | 0.905 |
 | MRR | 0.706437 |
@@ -58,13 +58,13 @@ python scripts/run_public_eval.py --output results_rerank_risk_aware_mmr_profile
 | TechnicalScore | 0.813731 |
 | LLM tokens | 0 |
 
-该结果在相同固定环境变量下重复运行，汇总指标一致。评测结果应以该 JSON 文件和官方 evaluator 的实际输出为准。
+This result is consistent across repeated runs under the same fixed environment variables. Evaluation results should be based on this JSON file and the official evaluator's actual output.
 
-## 修改范围
+## Scope of Changes
 
-- 主要逻辑：`src/ranking/reranker.py`
-- 画像先验：`src/ranking/profile_prior.py`
-- 参数配置：`src/config/default.yaml`
-- 结果文件：`results_rerank_risk_aware_mmr_profile.json`
+- Main logic: `src/ranking/reranker.py`
+- Profile prior: `src/ranking/profile_prior.py`
+- Parameter config: `src/config/default.yaml`
+- Result file: `results_rerank_risk_aware_mmr_profile.json`
 
-官方 `evaluator/` 未作重构或修改。
+Official `evaluator/` was not refactored or modified.

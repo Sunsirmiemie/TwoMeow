@@ -1,163 +1,163 @@
-# TwoMeow 基线稳定化说明
+# TwoMeow Baseline Stabilization
 
-> 历史稳定化记录（2026-08-27）：本文件不描述后续 rerank 改动。`results.json` 保留为原始下载时旧结果；当前 rerank 结果位于 `results_rerank_risk_aware_mmr_profile.json`。
+> Historical stabilization record (2026-08-27): this file does not describe subsequent rerank changes. `results.json` is retained as the original downloaded legacy result; the current rerank result is in `results_rerank_risk_aware_mmr_profile.json`.
 
-## 1. 状态与边界
+## 1. Status and Scope
 
-- 工作分支：`stabilize-baseline`
-- 基准提交：`64a7db54d5185a835fa8a850f14b2f22cb1d900e`
-- 记录日期：2026-08-27
-- 当前状态：改动仅保存在本地工作区，尚未提交，也未推送远端
-- 本轮目标：把入口、配置、关键数据边界、评测分析与安装/测试方式收敛成一条可信且可复现的基线
+- Working branch: `stabilize-baseline`
+- Reference commit: `64a7db54d5185a835fa8a850f14b2f22cb1d900e`
+- Record date: 2026-08-27
+- Current status: changes saved in local workspace only, not yet committed or pushed
+- This round's goal: converge the entry point, configuration, key data boundaries, evaluation analysis, and installation/test process into a single trustworthy and reproducible baseline
 
-本轮没有覆盖 `results.json` 或 `results_optimal.json`，也没有宣称重新验证过 Dense 或真实 LLM 路径。应用代码以最小兼容改动为主，旧入口仍可使用。
+This round did not overwrite `results.json` or `results_optimal.json`, and did not claim to have re-validated the Dense or real LLM paths. Application code changes are minimal and backward-compatible; the old entry point still works.
 
-## 2. 为什么要做这次稳定化
+## 2. Why This Stabilization Was Needed
 
-原基线存在几类会影响复现和后续优化的问题：
+The original baseline had several issues affecting reproducibility and follow-up optimization:
 
-1. 仓库有两套 `Agent` 实现，不同入口可能执行不同逻辑。
-2. 商品价格既可能是数值，也可能是 `"—"`、`"from 12.99"` 等文本；带预算搜索会把字符串与浮点数直接比较。
-3. `default.yaml` 看似是统一配置源，但运行时仍有多处硬编码，命令行默认值也会无条件覆盖 YAML。
-4. LLM token usage 是进程累计值，而评测器需要单次响应的 usage。
-5. 失败分析读取不存在的 `first_hit_rank`，与评测器实际输出的 `hit` / `best_rank` 不一致。
-6. 缺少正式的 Python 版本范围、可选依赖分组和安装后制品测试。
-7. README 将历史最佳结果写成“当前成绩”，没有区分历史制品与本轮可复现结果。
+1. The repository had two `Agent` implementations; different entry points could execute different logic.
+2. Product prices could be numeric or strings like `"—"` or `"from 12.99"`; budget-filtered searches would directly compare strings with floats.
+3. `default.yaml` appeared to be a unified config source, but multiple hardcoded values remained at runtime, and CLI defaults would unconditionally override YAML.
+4. LLM token usage was a cumulative process value, while the evaluator needed per-response usage.
+5. Failure analysis read a non-existent `first_hit_rank`, inconsistent with the evaluator's actual `hit` / `best_rank` output.
+6. No formal Python version range, optional dependency groups, or post-install artifact tests.
+7. README presented historical best results as "current scores" without distinguishing historical artifacts from this round's reproducible results.
 
-因此，本轮先修复“结果是否可信、入口是否唯一、配置是否真正生效、环境是否可装”这些基础问题，再继续做召回与对话策略优化。
+Therefore, this round first fixes the foundational questions — "are results trustworthy, is there a single entry point, does configuration actually take effect, can the environment be installed" — before continuing with retrieval and dialogue strategy optimization.
 
-## 3. 具体改动
+## 3. Specific Changes
 
-### 3.1 唯一 Agent 实现与兼容入口
+### 3.1 Single Agent Implementation and Compatible Entry Points
 
-`src.agent.orchestrator.Agent` 现在是唯一实现：
+`src.agent.orchestrator.Agent` is now the sole implementation:
 
-- `starter.agent.Agent` 继续 re-export 该类，满足官方评测入口；
-- `agent.agent.Agent` 改为兼容 re-export，不再维护第二套实现；
-- `run_eval.py` 与 `scripts/run_public_eval.py` 直接使用 canonical Agent；
-- 测试断言三个公开入口都指向同一个类对象。
+- `starter.agent.Agent` continues to re-export this class, satisfying the official evaluation entry point;
+- `agent.agent.Agent` is changed to a compatible re-export, no longer maintaining a second implementation;
+- `run_eval.py` and `scripts/run_public_eval.py` use the canonical Agent directly;
+- Tests assert that all three public entry points point to the same class object.
 
-这保留了旧 import 路径，同时消除了实现漂移。
+This preserves old import paths while eliminating implementation drift.
 
-### 3.2 价格标准化与预算行为
+### 3.2 Price Normalization and Budget Behavior
 
-目录装载时统一处理价格：
+Catalog loading uniformly handles prices:
 
-- 可转换且有限的值（例如 `29.99`、`"29.99"`）转为 `float`；
-- 缺失值、不可解析文本、`NaN` 和无穷值转为 `None`；
-- buying 场景应用预算过滤时，已知价格只保留 `price <= budget` 的商品；
-- 未知价格保留在候选中，避免因为目录字段不规范而丢失潜在命中。
+- Convertible and finite values (e.g., `29.99`, `"29.99"`) are converted to `float`;
+- Missing values, unparseable strings, `NaN`, and infinite values are converted to `None`;
+- Budget filtering in the buying scenario retains only products where `price <= budget` for known prices;
+- Unknown prices are kept in candidates, avoiding loss of potential hits due to catalog field irregularities.
 
-这是保守策略：`"from 12.99"` 当前不会猜测为 12.99，而是按未知价格处理。
+This is a conservative strategy: `"from 12.99"` is currently not guessed as 12.99, but treated as unknown price.
 
-### 3.3 YAML 配置真正进入运行时
+### 3.3 YAML Configuration Actually Enters Runtime
 
-新增 `src.config.load_config()`，读取嵌套的 `src/config/default.yaml`，再映射为 Agent 使用的扁平配置。当前接线覆盖：
+Added `src.config.load_config()`, reads the nested `src/config/default.yaml`, then maps to the flat config used by Agent. Current wiring covers:
 
-- 检索数量与 BM25 字段权重；
-- RRF 常数、基础融合权重和按槽位数量变化的 browsing 权重（0 槽 50/50、1 槽 60/40、≥2 槽使用基础权重 75/25）；
-- Dense 开关、模型名和 batch size；
-- LLM ranker 开关、模型名和 rerank top-N；
-- entropy threshold、动态熵最小候选池；
-- rerank pool 的槽位、候选数和截断阈值；
-- dynamic entropy、early stop 与 override detection 开关。
+- Retrieval counts and BM25 field weights;
+- RRF constant, base fusion weights, and browsing weights varying by slot count (0 slots 50/50, 1 slot 60/40, ≥2 slots use base weight 75/25);
+- Dense toggle, model name, and batch size;
+- LLM ranker toggle, model name, and rerank top-N;
+- Entropy threshold, dynamic entropy minimum candidate pool;
+- Rerank pool slot count, candidate count, and truncation threshold;
+- Dynamic entropy, early stop, and override detection toggles.
 
-合并语义如下：
+Merge semantics:
 
-1. 每次调用都从 YAML 读取并深拷贝默认值；
-2. 调用方传入的是扁平 override，显式值最后生效；
-3. `field_weights` 支持局部深合并，例如只覆盖 `title` 不会清空其余字段；
-4. 其他列表或映射同样复制后再使用，不会反向修改调用方对象；
-5. CLI 只有在用户显式提供 `--no-dense` 或 `--llm-rank` 时才生成 override；未传参数时保留 YAML 默认值。
+1. Each call reads from YAML and deep-copies the default values;
+2. Caller passes a flat override; explicit values take final precedence;
+3. `field_weights` supports partial deep merge — overriding only `title` will not clear other fields;
+4. Other lists or mappings are also copied before use, preventing reverse modification of caller objects;
+5. CLI only generates overrides when the user explicitly provides `--no-dense` or `--llm-rank`; unprovided parameters retain YAML defaults.
 
-### 3.4 单响应 token usage
+### 3.4 Per-Response Token Usage
 
-`Ranker` 在每次 `rerank()` 开始时把 usage 归零，并只记录该次 API 响应的输入/输出 token：
+`Ranker` resets usage to zero at the start of each `rerank()` call, recording only the input/output tokens of that API response:
 
-- 连续两次调用不会累加；
-- LLM 禁用、候选为空或 API 在收到响应前失败时返回 0/0；
-- 已收到响应但返回内容无法解析时，保留本次响应的 usage，并回退到原检索顺序；
-- 测试通过注入 fake client 验证，不访问真实网络。
+- Two consecutive calls do not accumulate;
+- Returns 0/0 when LLM is disabled, candidates are empty, or API fails before receiving a response;
+- When a response is received but content cannot be parsed, retains this response's usage and falls back to original retrieval order;
+- Tests verified via injected fake client, no real network access.
 
-### 3.5 失败分析对齐评测器 schema
+### 3.5 Failure Analysis Aligned to Evaluator Schema
 
-失败分析现在以官方评测器实际字段为准：
+Failure analysis now uses the official evaluator's actual fields:
 
-- near miss：`hit is True` 且 `best_rank` 位于指定闭区间，默认 6–10；
-- complete miss：`hit is False`；
-- `scripts/inspect_failures.py` 输出 `sample_id` 与 `best_rank`。
+- Near miss: `hit is True` and `best_rank` within a specified closed interval, default 6–10;
+- Complete miss: `hit is False`;
+- `scripts/inspect_failures.py` outputs `sample_id` and `best_rank`.
 
-### 3.6 打包、依赖与仓库卫生
+### 3.6 Packaging, Dependencies, and Repository Hygiene
 
-- 新增 `pyproject.toml`，支持 Python `>=3.10,<3.13`；
-- 核心依赖：`numpy>=1.26,<3`、`PyYAML>=6,<7`；
-- 可选 extras：`dense`、`llm`、`test`；
-- `requirements.txt` 是 Dense、LLM、测试和构建工具的完整聚合环境；
-- wheel 包含 `src/config/default.yaml`，并提供 canonical、starter 和 legacy 三个入口；
-- 新增 `.gitignore`，阻止新增的 `graft/`、Python/pytest 缓存、虚拟环境、`.env`、`.idea/`、`.embed_cache/`、`*.egg-info/`、`build/`、`dist/`、指定 catalog 副本和 `*.zip` 被跟踪。
+- Added `pyproject.toml`, supports Python `>=3.10,<3.13`;
+- Core dependencies: `numpy>=1.26,<3`, `PyYAML>=6,<7`;
+- Optional extras: `dense`, `llm`, `test`;
+- `requirements.txt` is the full aggregate environment for Dense, LLM, testing and build tools;
+- wheel includes `src/config/default.yaml`, and provides canonical, starter, and legacy entry points;
+- Added `.gitignore` blocking newly added `graft/`, Python/pytest caches, virtual environments, `.env`, `.idea/`, `.embed_cache/`, `*.egg-info/`, `build/`, `dist/`, specified catalog copies, and `*.zip` from being tracked.
 
-注意：这些规则只影响尚未跟踪且匹配上述模式的文件，不会自动解除仓库中已有大文件、catalog、zip 或 IDE 文件的跟踪状态。
+Note: these rules only affect currently-untracked files matching the above patterns; they will not automatically untrack existing large files, catalog, zip, or IDE files in the repository.
 
-### 3.7 测试补强
+### 3.7 Test Reinforcement
 
-新增或扩展的测试覆盖：
+New or extended test coverage:
 
-- 非数字价格与预算过滤；
-- canonical Agent 入口一致性；
-- YAML 默认值、扁平 override、局部字段权重合并与调用方对象隔离；
-- 配置项是否真正传到 BM25、Dense、RRF、对话熵阈值和 rerank pool；
-- CLI 仅生成显式 override；
-- 单响应 token usage、禁用/空候选/API 异常/无效 JSON 回退；
-- `hit` / `best_rank` 失败分析；
-- wheel 解压后的隔离导入/构造中，入口、评测器模块和 YAML 制品可用。
+- Non-numeric prices and budget filtering;
+- Canonical Agent entry point consistency;
+- YAML defaults, flat overrides, partial field weight merges, and caller object isolation;
+- Whether config values actually reach BM25, Dense, RRF, dialogue entropy threshold, and rerank pool;
+- CLI generates only explicit overrides;
+- Per-response token usage, disabled/empty candidates/API exception/invalid JSON fallback;
+- `hit` / `best_rank` failure analysis;
+- Isolated import/construction from the wheel unpacked to a temp directory: entry points, evaluator module, and YAML artifact are available.
 
-## 4. RED → GREEN 记录
+## 4. RED → GREEN Record
 
-本轮按行为契约逐项先写失败测试，再实现最小修复：
+This round followed a behavior-contract-first approach: failing tests were written before implementing minimal fixes:
 
-| 契约 | RED 现象 | GREEN 结果 |
+| Contract | RED behavior | GREEN result |
 | --- | --- | --- |
-| 非数字价格可参与带预算检索 | 字符串价格与浮点预算比较触发 `TypeError` | 非法价格归一为 `None`，未知价格保留 |
-| 失败分析读取官方 schema | `first_hit_rank` 不存在，命中/漏召分类错误 | 使用 `hit` 与 `best_rank` |
-| 所有公开入口使用同一 Agent | legacy 与 canonical 是不同类 | 三个入口均 re-export canonical 类 |
-| YAML 是运行时默认配置 | 没有公开 loader，多个默认值未进入组件 | loader、CLI 和各组件完整接线 |
-| token usage 属于单次响应 | 第二次调用包含第一次 token | 每次调用独立重置和记录 |
-| 安装制品可独立运行 | 无标准项目元数据和 YAML 制品约束 | wheel 解压后的隔离导入/构造测试通过 |
+| Non-numeric prices can participate in budget-filtered search | String price vs. float budget triggers `TypeError` | Invalid prices normalized to `None`, unknown prices retained |
+| Failure analysis reads official schema | `first_hit_rank` doesn't exist, hit/miss classification wrong | Uses `hit` and `best_rank` |
+| All public entry points use same Agent | Legacy and canonical are different classes | All three entry points re-export canonical class |
+| YAML is runtime default configuration | No public loader, multiple defaults not reaching components | Loader, CLI, and components fully wired |
+| Token usage belongs to single response | Second call includes first call's tokens | Each call independently resets and records |
+| Installed artifact can run standalone | No standard project metadata and YAML artifact constraint | Isolated import/construction test from wheel passes |
 
-## 5. 验证结果
+## 5. Verification Results
 
-### 5.1 自动化测试与制品隔离
+### 5.1 Automated Tests and Artifact Isolation
 
-独立验证阶段在三个受支持的 Python 次版本上运行完整套件：
+Independent verification ran the full suite on three supported Python minor versions:
 
-| Python | 结果 |
+| Python | Result |
 | --- | --- |
 | 3.10 | `74 passed` |
 | 3.11 | `74 passed` |
 | 3.12 | `74 passed` |
 
-统一命令：
+Unified command:
 
 ```bash
 python -m pytest -q
 ```
 
-其中制品测试会构建 wheel，把它解压到临时目录，移除仓库路径与 editable-import finder，再验证：
+The artifact test builds a wheel, unpacks it to a temp directory, removes the repo path and editable-import finder, then verifies:
 
-- `src.agent.orchestrator.Agent`、`starter.agent.Agent`、`agent.agent.Agent` 均来自该 wheel 且身份一致；
-- `evaluator.local_evaluator` 可从制品导入；
-- `default.yaml` 已打包；
-- tiny catalog 可以创建 Agent。
+- `src.agent.orchestrator.Agent`, `starter.agent.Agent`, `agent.agent.Agent` all come from this wheel and are identical;
+- `evaluator.local_evaluator` can be imported from the artifact;
+- `default.yaml` is packaged;
+- A tiny catalog can create an Agent.
 
-同时通过：
+Also passes:
 
-- `git diff --check`；
-- `results.json` 与 `results_optimal.json` 相对基准提交逐字节不变；
-- 评测输出写入 `/tmp`，未写入仓库结果文件；验证产生的仓库根目录 `build/` 与 `*.egg-info/` 已在检查后精确清理，最终不存在根目录 `build/`、`dist/` 或 `*.egg-info/`。
+- `git diff --check`;
+- `results.json` and `results_optimal.json` byte-identical relative to the reference commit;
+- Evaluation output written to `/tmp`, not written to repository result files; repository root `build/` and `*.egg-info/` generated during verification are cleaned up precisely after checking, leaving no root `build/`, `dist/`, or `*.egg-info/`.
 
-### 5.2 本轮可复现 BM25-only 公共集基线
+### 5.2 This Round's Reproducible BM25-only Public Set Baseline
 
-为避免覆盖仓库结果，输出必须显式写到临时目录：
+To avoid overwriting repository results, output must be explicitly written to a temp directory:
 
 ```bash
 python scripts/run_public_eval.py \
@@ -165,9 +165,9 @@ python scripts/run_public_eval.py \
   --output /tmp/twomeow_bm25_stabilize_20260827.json
 ```
 
-2026-08-27 在 Python 3.12.13、PyYAML 6.0.3、NumPy 2.4.6 下重跑 200 个公开 session，得到：
+Re-ran 200 public sessions on 2026-08-27 with Python 3.12.13, PyYAML 6.0.3, NumPy 2.4.6:
 
-| 指标 | 数值 |
+| Metric | Value |
 | --- | ---: |
 | sample_count | 200 |
 | HitRate@10 | 0.865 |
@@ -177,50 +177,50 @@ python scripts/run_public_eval.py \
 | Recommended Technical Score | 0.745273 |
 | Prompt / Completion Tokens | 0 / 0 |
 
-该结果只验证 BM25-only 路径；未加载 sentence-transformers，也未调用 LLM。
+This result only validates the BM25-only path; sentence-transformers was not loaded, no LLM was called.
 
-### 5.3 仓库内历史结果文件的口径
+### 5.3 Historical Result Files in Repository
 
-两个文件都保留原样：
+Both files retained as-is:
 
-| 文件 | 定位 | HitRate@10 | MRR | MTTC | TechScore |
+| File | Role | HitRate@10 | MRR | MTTC | TechScore |
 | --- | --- | ---: | ---: | ---: | ---: |
-| `results_optimal.json` | 仓库已有的历史最佳记录 | 0.890 | 0.554536 | 3.405 | 0.763261 |
-| `results.json` | 较早、非 canonical 的旧结果，不再作为当前基线 | 0.790 | 0.471744 | 5.12 | 0.654123 |
+| `results_optimal.json` | Existing historical best record | 0.890 | 0.554536 | 3.405 | 0.763261 |
+| `results.json` | Earlier, non-canonical legacy result, no longer current baseline | 0.790 | 0.471744 | 5.12 | 0.654123 |
 
-历史最佳文件不是本轮新生成的结果。项目原有说明把它记录为无 LLM 实验，但 JSON 本身没有足够的运行配置 provenance 可独立证明这一点；本轮新鲜、可复现且环境口径明确的数字是上一节的 BM25-only 基线。
+The historical best file was not newly generated in this round. The project's original notes recorded it as a no-LLM experiment, but the JSON itself does not contain sufficient run configuration provenance to independently verify this; the fresh, reproducible, and clearly-scoped numbers for this round are the BM25-only baseline in the previous section.
 
-## 6. 已知限制与延期工作
+## 6. Known Limitations and Deferred Work
 
-1. **价格语义仍然保守**：`"from 12.99"` 被视为未知，没有解析币种、区间或起售价。
-2. **配置只有接线与合并，没有 schema 校验**：非法类型、负阈值、缺字段或权重长度错误可能在下游才暴露。
-3. **旧 `agent/` 模块树仍保留**：入口已经统一，但旧实现依赖的辅助模块尚未删除，以降低本轮兼容风险。
-4. **已跟踪的大文件尚未清理**：目录副本、Dense cache、participant kit zip 和 `.idea` 文件仍在 Git 历史/索引中；新增 ignore 规则不会自动解除跟踪。
-5. **Dense 的严格离线行为未验证**：sentence-transformers 可能在模型未缓存时尝试下载；本轮没有新跑完整 Dense 评测。
-6. **真实 LLM 路径未验证**：仅使用 fake client 验证协议、usage 和回退；没有调用 Anthropic API。
-7. **依赖尚未锁定到哈希级别**：版本范围可安装，但不同时间解析出的传递依赖可能变化。
-8. **BM25 查询仍是 OR 组合**：召回较宽，槽值重复在去重后不会形成额外词频权重，需要单独实验 AND/短语/分字段策略。
-9. **熵公式与论文口径仍需校对**：当前归一化分母使用候选值数量；需要和属性取值域口径做对照实验。
-10. **early stop 的 `other` 策略仍需验证**：低信息增益时询问 `other` 是启发式设计，是否优于停止提问或返回结果要用分场景消融确认。
+1. **Price semantics remain conservative**: `"from 12.99"` is treated as unknown, without parsing currency, ranges, or starting prices.
+2. **Config has wiring and merging but no schema validation**: invalid types, negative thresholds, missing fields, or wrong weight lengths may only surface downstream.
+3. **Old `agent/` module tree retained**: entry points are unified, but auxiliary modules from the old implementation have not been deleted, to reduce compatibility risk in this round.
+4. **Tracked large files not yet cleaned**: catalog copies, Dense cache, participant kit zip, and `.idea` files remain in Git history/index; new ignore rules will not automatically untrack them.
+5. **Dense strict offline behavior not verified**: sentence-transformers may attempt downloads when the model is not cached; no full Dense evaluation was run in this round.
+6. **Real LLM path not verified**: only protocol, usage, and fallback verified with fake client; Anthropic API was not called.
+7. **Dependencies not locked to hash level**: version ranges are installable, but transitive dependencies resolved at different times may vary.
+8. **BM25 queries remain OR-combined**: recall is broad; slot value repetition does not create additional term frequency weight after deduplication; needs separate experiments with AND/phrase/per-field strategies.
+9. **Entropy formula vs. paper scope still needs calibration**: current normalization denominator uses candidate value count; needs comparison experiment with attribute value domain scope.
+10. **Early stop `other` strategy still needs validation**: asking `other` under low information gain is a heuristic design; whether it outperforms stopping questions or returning results needs per-scenario ablation confirmation.
 
-## 7. 下一步建议
+## 7. Next Steps
 
-按优先级推进：
+In priority order:
 
-1. **建立唯一的官方基线流程**：在固定环境中分别跑 BM25-only 与可离线加载的 Dense，保存命令、依赖快照、模型来源和新结果文件；明确哪个结果可以发布。
-2. **补配置校验与错误信息**：对权重、阈值、路径、模型与布尔开关做启动时校验，避免静默退化。
-3. **围绕 200 条公开集做检索实验**：优先比较 BM25 OR/AND/phrase、槽值字段加权与 unknown-price 策略，所有实验输出到新文件，不能覆盖历史制品。
-4. **校正对话策略口径**：对熵归一化和 `other` early-stop 做分场景消融，重点观察 MTTC 与 HitRate 的交换关系。
-5. **完成仓库减重**：确认数据分发要求后，解除已跟踪的 IDE、cache、重复 catalog 和 zip；如需保留大文件，改用发布制品或 LFS。
-6. **生成依赖锁与离线安装包**：为 Python 3.10–3.12 生成可审计锁文件，并验证无网络安装和模型加载。
-7. **最后再删除旧模块树**：先对外宣布 canonical import，再移除不再使用的 legacy 辅助模块。
+1. **Establish a single official baseline process**: run BM25-only and offline-loadable Dense separately in a fixed environment, save commands, dependency snapshot, model provenance, and new result files; clarify which results can be published.
+2. **Add config validation and error messages**: validate weights, thresholds, paths, models, and boolean toggles at startup, avoiding silent degradation.
+3. **Run retrieval experiments on 200 public sessions**: prioritize comparing BM25 OR/AND/phrase, slot value field weighting, and unknown-price strategies; all experiment output to new files, cannot overwrite historical artifacts.
+4. **Calibrate dialogue strategy scope**: run per-scenario ablation on entropy normalization and `other` early-stop, focusing on the MTTC vs. HitRate tradeoff.
+5. **Complete repository size reduction**: after confirming data distribution requirements, untrack IDE files, caches, duplicate catalogs, and zip; if large files must be retained, switch to release artifacts or LFS.
+6. **Generate dependency lock and offline install packages**: generate auditable lock files for Python 3.10–3.12, and verify network-free installation and model loading.
+7. **Delete old module tree last**: first announce canonical import externally, then remove no-longer-used legacy auxiliary modules.
 
-## 8. 当前 Git 状态
+## 8. Current Git Status
 
-本说明完成时仍遵循以下边界：
+At the time this document was completed, the following boundaries remained:
 
-- 分支已创建：`stabilize-baseline`；
-- 未创建 commit；
-- 未设置或推送远端分支；
-- `results.json` 与 `results_optimal.json` 未改动；
-- 本轮记录的 BM25-only 输出保存在 `/tmp/twomeow_bm25_stabilize_20260827.json`，从未写入仓库内的结果文件。
+- Branch created: `stabilize-baseline`;
+- No commit created;
+- No remote branch set or pushed;
+- `results.json` and `results_optimal.json` unchanged;
+- This round's recorded BM25-only output saved to `/tmp/twomeow_bm25_stabilize_20260827.json`, never written to in-repository result files.

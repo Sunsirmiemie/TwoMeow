@@ -1,4 +1,4 @@
-# 目录结构建议(可修改）  
+# Directory Structure Guidelines (modifiable)
 techjam-conversational-search/  
 │  
 ├── data/  
@@ -71,17 +71,17 @@ techjam-conversational-search/
 ├── README.md  
 ├── requirements.txt  
 └── .env.example  
-## 文件大小与代码规范  
-为了支持五人协作：  
-* 单个业务 Python 文件尽量控制在 200–250 行以内。  
-* 一个文件只承担一个清晰职责。  
-* 禁止出现超过 500 行的“万能 agent.py”。  
-* 不允许模块之间循环 import。  
-* 所有关键超参数进入 config。  
-* 所有公共函数必须有 type hints。  
-* 核心策略必须写简短 docstring。  
-* 不允许把实验逻辑散落在业务代码。  
-* 所有实验必须可以通过脚本重跑。  
-* 官方 evaluator 文件视为外部依赖，不得重构。  
-  
-可参考中文四层架构开发规范.md skill  
+
+## File Size and Code Standards
+
+To support five-person collaboration:
+* Individual business Python files should stay within 200–250 lines.
+* One file carries one clear responsibility.
+* No "super agent.py" files exceeding 500 lines.
+* No circular imports between modules.
+* All key hyperparameters go into config.
+* All public functions must have type hints.
+* Core strategies must have a short docstring.
+* No experimental logic scattered in business code.
+* All experiments must be reproducible via scripts.
+* Official evaluator files are treated as external dependencies and must not be refactored.

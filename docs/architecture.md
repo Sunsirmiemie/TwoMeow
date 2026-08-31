@@ -1,45 +1,45 @@
-# 系统架构
+# System Architecture
 
-## 总览
+## Overview
 
-TwoMeow 是一个纯内存、无外部数据库依赖的多轮对话电商搜索 Agent，实现官方 `reset() / respond()` 接口。
+TwoMeow is a pure in-memory, no-external-database multi-turn conversational e-commerce search Agent, implementing the official `reset() / respond()` interface.
 
 ```
-用户消息 (turn N)
+User message (turn N)
       │
       ▼
 ┌─────────────────────────────────────────────────┐
 │  src/agent/orchestrator.py  (Agent.respond)      │
 │                                                 │
-│  ① IntentRouter   场景分类 + Override 检测       │
-│  ② SlotTracker    结构化槽提取                   │
-│  ③ HybridRetriever 检索 (BM25 + Dense + RRF)    │
-│  ④ Clarifier      动态熵属性选择 + Early Stop     │
-│  ⑤ Ranker         top-20 → 字段感知本地重排 → top-10 │
-│  ⑥ 返回结果        recommendations + ask_attr    │
+│  ① IntentRouter   Scene classification + Override detection │
+│  ② SlotTracker    Structured slot extraction             │
+│  ③ HybridRetriever Retrieval (BM25 + Dense + RRF)       │
+│  ④ Clarifier      Dynamic entropy attribute selection + Early Stop │
+│  ⑤ Ranker         top-20 → field-aware local reranking → top-10 │
+│  ⑥ Return result  recommendations + ask_attr            │
 └─────────────────────────────────────────────────┘
       │
       ▼
-评估器决定下一轮用户消息
+Evaluator determines next turn's user message
 ```
 
-## 模块依赖关系
+## Module Dependency Graph
 
 ```
-dialogue/attribute_stats.py   ← 基础层（无内部依赖）
-agent/state.py                ← 基础层
+dialogue/attribute_stats.py   ← Base layer (no internal deps)
+agent/state.py                ← Base layer
 
 dialogue/entropy.py           ← attribute_stats
-dialogue/override.py          ← 无内部依赖
+dialogue/override.py          ← no internal deps
 dialogue/question_policy.py   ← entropy + attribute_stats
 dialogue/early_stop.py        ← entropy
 
 agent/router.py               ← dialogue/override
-agent/response_builder.py     ← 无内部依赖
+agent/response_builder.py     ← no internal deps
 
-ranking/scorer.py             ← 无内部依赖
-ranking/features.py           ← 无内部依赖
-ranking/profile_prior.py       ← 无内部依赖
+ranking/scorer.py             ← no internal deps
+ranking/features.py           ← no internal deps
+ranking/profile_prior.py       ← no internal deps
 ranking/reranker.py           ← profile_prior
 
 retrieval/catalog.py          ← dialogue/attribute_stats
@@ -47,140 +47,140 @@ retrieval/bm25.py             ← retrieval/catalog
 retrieval/dense.py            ← ranking/features
 retrieval/hybrid.py           ← retrieval/bm25 + retrieval/dense + ranking/scorer
 
-agent/orchestrator.py         ← 全部上层模块
+agent/orchestrator.py         ← all upper layers
 ```
 
-依赖方向单向：`dialogue/ranking → retrieval → agent`，无循环 import。
+Dependency direction is one-way: `dialogue/ranking → retrieval → agent`, no circular imports.
 
-## 各层职责
+## Layer Responsibilities
 
-### Layer 1: 对话状态（`src/agent/state.py`）
+### Layer 1: Dialogue State (`src/agent/state.py`)
 
-**SessionMemory** — 单会话内存：
-- `slots: dict[str, str]` — 已确认约束（material/color/size/style/use_case/feature/budget）
+**SessionMemory** — single-session memory:
+- `slots: dict[str, str]` — confirmed constraints (material/color/size/style/use_case/feature/budget)
 - `scenario_type` — buying / browsing / intent_override / boundary
-- `asked_attributes` — 已问过的属性（防重复）
-- `history` — 近期消息记录（用于查询构建）
+- `asked_attributes` — already-asked attributes (prevents repetition)
+- `history` — recent message history (for query construction)
 
-**SlotTracker** — 解析规则（优先级从高到低）：
-1. `"what matters is: X; Y"` → 结构化多槽解析
-2. `"a key requirement is: X"` → 单槽买家约束
-3. `"what I need is: X"` → Override 后新约束
-4. 自由文本 → 正则 fallback（不覆盖已有槽）
+**SlotTracker** — parsing rules (priority from high to low):
+1. `"what matters is: X; Y"` → structured multi-slot parsing
+2. `"a key requirement is: X"` → single-slot buyer constraint
+3. `"what I need is: X"` → new constraint post-Override
+4. Free text → regex fallback (does not override existing slots)
 
-槽分类器完全 mirror 评估器 `classify_constraint()`，保证一致性。
+Slot classifier mirrors the evaluator's `classify_constraint()` exactly, ensuring consistency.
 
-### Layer 2: 场景路由（`src/agent/router.py` + `src/dialogue/override.py`）
+### Layer 2: Scene Routing (`src/agent/router.py` + `src/dialogue/override.py`)
 
-| 信号 | 模式 | 动作 |
+| Signal | Pattern | Action |
 |------|------|------|
-| Intent Override | `"ignore my earlier preference"` | 清空 slots + asked_attributes，改为 buying 轨道 |
-| Boundary | `"please use your judgment"` | 设标志，跳过本属性，继续 |
+| Intent Override | `"ignore my earlier preference"` | Clear slots + asked_attributes, switch to buying track |
+| Boundary | `"please use your judgment"` | Set flag, skip this attribute, continue |
 | Buying | Turn 0 + `"a key requirement is:"` | scenario_type = buying |
-| Browsing | Turn 0 + 其他 | scenario_type = browsing |
+| Browsing | Turn 0 + other | scenario_type = browsing |
 
-### Layer 3: 检索（`src/retrieval/`）
+### Layer 3: Retrieval (`src/retrieval/`)
 
-**BM25 检索**（SQLite FTS5，全内存）
+**BM25 Retrieval** (SQLite FTS5, fully in-memory)
 
-字段权重：
+Field weights:
 ```
 title(6.0) > categories(4.0) > features(2.5) = description(2.5) > store(1.5) > details(1.0)
 ```
 
-查询构建：`slot_text×2 + 当前消息 + 近3轮历史`（双重 slot 放大 BM25 精准匹配权重）
+Query construction: `slot_text×2 + current message + last 3 turns of history` (double slot text amplifies BM25 exact-match weight)
 
-Buying 专属：追加 `price ≤ budget` 硬过滤。
+Buying-specific: appends `price ≤ budget` hard filter.
 
-**Dense 检索**（sentence-transformers all-MiniLM-L6-v2）
+**Dense Retrieval** (sentence-transformers all-MiniLM-L6-v2)
 
-字段分离编码策略（字段感知 Dense）：
-- 身份向量：`title + categories + store`
-- 属性向量：`features + details + description`
+Field-separated encoding strategy (field-aware Dense):
+- Identity vector: `title + categories + store`
+- Attribute vector: `features + details + description`
 
-查询同样分成类别/身份查询与属性查询，两个相似度分数在运行时加权融合，不拼接向量。已知具体属性越多，属性相似度权重越高；类别明确时身份相似度权重更高。
+Query is likewise split into category/identity query and attribute query; the two similarity scores are weighted and fused at runtime without concatenating vectors. The more specific attributes are known, the higher the attribute similarity weight; when the category is clear, identity similarity weight is higher.
 
-50K 商品首次编码后缓存 `.embed_cache/*.npz`，后续直接加载。
+50K products are cached as `.embed_cache/*.npz` after first encoding and loaded directly thereafter.
 
-**风险门控**：BM25 候选充足（≥20 且有稳定类别）时跳过 Dense；Buying 轨道始终跳过 Dense。Dense 不可用时自动回退 BM25。
+**Risk gate**: skips Dense when BM25 candidates are sufficient (≥20 with stable category); Buying track always skips Dense. Automatically falls back to BM25 if Dense is unavailable.
 
-cosine similarity via dot product（L2 归一化后等价）+ partial sort O(n log k)。
+cosine similarity via dot product (equivalent to L2-normalized dot product) + partial sort O(n log k).
 
-**RRF 融合**（仅 Browsing 轨道，Dense 门控通过后）
+**RRF Fusion** (Browsing track only, after Dense risk gate passes)
 
-| 已确认槽数 | BM25 权重 | Dense 权重 | 逻辑 |
+| Confirmed slots | BM25 weight | Dense weight | Rationale |
 |-----------|-----------|-----------|------|
-| 0 | 50% | 50% | 无约束，语义召回兜底 |
-| 1 | 60% | 40% | 约束少，仍需语义 |
-| ≥2 | 75% | 25% | 约束多，精确匹配为主 |
+| 0 | 50% | 50% | No constraints, semantic recall as fallback |
+| 1 | 60% | 40% | Few constraints, still need semantic |
+| ≥2 | 75% | 25% | Many constraints, exact match preferred |
 
 `score = w_bm25 × 1/(60+rank_bm25) + w_dense × 1/(60+rank_dense)`
 
-Buying 轨道跳过 Dense，直接 BM25-only（评估器每轮给出精确约束文本，Dense 在此场景引入噪声）。
+Buying track skips Dense, uses BM25-only directly (evaluator provides precise constraint text each turn; Dense introduces noise here).
 
-### Layer 4: 问题决策（`src/dialogue/`）
+### Layer 4: Question Decision (`src/dialogue/`)
 
-**信息熵打分**
+**Information Entropy Scoring**
 
-对候选池中每个剩余属性：
+For each remaining attribute in the candidate pool:
 ```
 score(attr) = coverage(attr) × entropy(attr)
 
-coverage = 有该属性值的商品 / 候选池总数
-entropy  = 归一化信息熵（池<10个时与全局熵加权混合）
+coverage = products with this attribute value / total candidate pool
+entropy  = normalized information entropy (blended with global entropy when pool < 10)
 ```
 
-全局熵来源：PDF 对 50,000 件商品的统计（use_case=0.87 > budget=0.79 > color=0.77 > …）
+Global entropy sourced from: PDF statistics over 50,000 products (use_case=0.87 > budget=0.79 > color=0.77 > …)
 
-**Early Stop（τ=0.3）**
+**Early Stop (τ=0.3)**
 
 ```python
 if max(score(attr) for attr in remaining) < 0.3:
-    ask "other"  # 通配，评估器返回任意剩余约束
+    ask "other"  # wildcard, evaluator returns any remaining constraint
 else:
-    ask argmax(score)  # 信息量最大的属性
+    ask argmax(score)  # attribute with highest information gain
 ```
 
-当候选池已收敛（属性分布均质化），继续问特定属性只会得到 "I don't have an additional preference"（空轮）。Early Stop 将 MTTC 从 5.1 降至 3.4，HitRate 从 0.800 升至 0.890。
+When the candidate pool has converged (attribute distributions become uniform), continuing to ask specific attributes only yields "I don't have an additional preference" (empty turns). Early Stop reduces MTTC from 5.1 to 3.4, and HitRate from 0.800 to 0.890.
 
-### Layer 5: 排序（`src/ranking/`）
+### Layer 5: Ranking (`src/ranking/`)
 
-**候选池截断**：slots < 2 且候选 ≥ 50 → 取 top-20（防止槽少时从过大的模糊池里猜）
+**Candidate pool truncation**: if slots < 2 and candidates ≥ 50 → take top-20 (prevents guessing from an overly fuzzy pool when few slots are confirmed)
 
-**字段感知本地重排**（默认）：
-- 固定取检索 top-20，输出 top-10；
-- 以 BM25/RRF 分数、类目、价格、热度和确认槽位的精确覆盖率组成相关性分；
-- 覆盖率检查商品 `title/categories/features/details` 是否满足已确认约束；
-- 不训练模型、不调用网络或 LLM。LLM 路径仅为兼容可选分支，不是默认评测方案。
+**Field-aware local reranking** (default):
+- Fixes retrieval top-20 as input, outputs top-10;
+- Relevance score composed of BM25/RRF scores, category, price, popularity, and confirmed slot exact coverage rate;
+- Coverage check verifies whether a product's `title/categories/features/details` satisfies confirmed constraints;
+- No model training, no network or LLM calls. LLM path retained as optional compatible branch, not the default evaluation approach.
 
-## 超参数汇总
+## Hyperparameter Summary
 
-全部集中在 `src/config/default.yaml`，代码中不出现魔法数字。
+All centralized in `src/config/default.yaml`; no magic numbers in code.
 
-| 参数 | 值 | 说明 |
+| Parameter | Value | Description |
 |------|-----|------|
-| RRF K | 60 | 标准 RRF 常数 |
-| BM25 base weight | 0.75 | Browsing ≥2 槽时 |
-| Dense base weight | 0.25 | 同上 |
-| entropy τ | 0.3 | Early Stop 阈值 |
-| min pool for dynamic | 10 | 小于此值混合全局熵 |
-| rerank top_n | 20 | 本地重排候选数 |
-| use_field_aware_slot_coverage | true | 确认槽位字段覆盖开关 |
-| truncated pool size | 20 | 槽少时截断 |
+| RRF K | 60 | Standard RRF constant |
+| BM25 base weight | 0.75 | Browsing ≥2 slots |
+| Dense base weight | 0.25 | Same |
+| entropy τ | 0.3 | Early Stop threshold |
+| min pool for dynamic | 10 | Below this, blend with global entropy |
+| rerank top_n | 20 | Local reranking candidate count |
+| use_field_aware_slot_coverage | true | Confirmed slot field coverage toggle |
+| truncated pool size | 20 | Truncation when few slots |
 
-## 历史系统消融结果（公开集 200 条，无 LLM 重排）
+## Historical System Ablation Results (public set 200 sessions, no LLM reranking)
 
-| 系统 | Buying | Browsing | Override | Boundary | Overall | MRR | MTTC | TechScore |
+| System | Buying | Browsing | Override | Boundary | Overall | MRR | MTTC | TechScore |
 |------|--------|----------|----------|----------|---------|-----|------|-----------|
-| 官方 Baseline | - | - | - | - | 0.125 | 0.068 | 9.81 | 0.107 |
+| Official Baseline | - | - | - | - | 0.125 | 0.068 | 9.81 | 0.107 |
 | BM25-only | 0.663 | 0.725 | 0.767 | 0.900 | 0.715 | 0.464 | 6.36 | 0.590 |
 | + Dense (Hybrid) | 0.663 | 0.725 | 0.767 | 0.900 | 0.715 | 0.427 | 6.38 | 0.578 |
 | + Entropy | 0.738 | 0.838 | 0.833 | 0.900 | 0.800 | 0.459 | 5.08 | 0.656 |
 | + Early Stop | 0.888 | 0.900 | 0.833 | 0.900 | 0.885 | 0.536 | 3.44 | 0.755 |
 | + Override | 0.888 | 0.900 | 0.867 | 0.900 | 0.890 | 0.555 | 3.40 | **0.763** |
 
-上表用于说明历史对话策略增益（截至 rerank 阶段前）。
+The above table documents historical dialogue strategy gains (up to the pre-rerank stage).
 
-**当前版本（三项优化后，2026-08-30）公开集结果**：HitRate@10=0.955、MRR=0.706129、MTTC=2.865、TechnicalScore=**0.852039**。详见 `docs/THREE_OPTIMIZATIONS_20260829.md`。
+**Current version (after three optimizations, 2026-08-30) public set results**: HitRate@10=0.955, MRR=0.706129, MTTC=2.865, TechnicalScore=**0.852039**. See `docs/THREE_OPTIMIZATIONS_20260829.md`.
 
-**泛化警告**：第二组与公开集零重叠的 400-ASIN 盲测（seed 20260830）中，TechnicalScore=0.750553，低于原版 BM25 的 0.760657。公开集提升不能视为已证明的泛化提升，当前三项优化仍应视为实验方案。
+**Generalization warning**: In the second 400-ASIN blind test with zero overlap with the public set (seed 20260830), TechnicalScore=0.750553, below the original BM25's 0.760657. The public set gains cannot be considered proven generalization; the three current optimizations should still be treated as experimental.
